@@ -12,6 +12,7 @@ import { useToast } from '../shared/Toast'
 import { useTranslation } from '../../i18n'
 import type { Place, Category, Day, Assignment, Reservation, TripFile, AssignmentsMap } from '../../types'
 import { splitReservationDateTime, formatTime } from '../../utils/formatters'
+import { formatDurationInput, parseDurationMinutes } from '../../utils/durationInput'
 
 const detailsCache = new Map()
 
@@ -109,6 +110,7 @@ interface PlaceInspectorProps {
   tripMembers?: TripMember[]
   onSetParticipants: (assignmentId: number, dayId: number, participantIds: number[]) => void
   onUpdatePlace: (placeId: number, data: Partial<Place>) => void
+  onUpdateAssignmentDuration?: (assignmentId: number, dayId: number, durationMinutes: number) => Promise<void> | void
   leftWidth?: number
   rightWidth?: number
 }
@@ -117,6 +119,7 @@ export default function PlaceInspector({
   place, categories, days, selectedDayId, selectedAssignmentId, assignments, reservations = [],
   onClose, onEdit, onDelete, onAssignToDay, onRemoveAssignment,
   files, onFileUpload, tripMembers = [], onSetParticipants, onUpdatePlace,
+  onUpdateAssignmentDuration,
   leftWidth = 0, rightWidth = 0,
 }: PlaceInspectorProps) {
   const { t, locale, language } = useTranslation()
@@ -240,6 +243,16 @@ export default function PlaceInspector({
             )}
           </div>
 
+          {assignmentInDay && selectedDayId && (
+            <AssignmentDurationControl
+              assignment={assignmentInDay}
+              dayId={selectedDayId}
+              placeDurationMinutes={place.duration_minutes}
+              onUpdateAssignmentDuration={onUpdateAssignmentDuration}
+              t={t}
+            />
+          )}
+
           {/* Telefon */}
           {(place.phone || googleDetails?.phone) && (
             <div style={{ display: 'flex', gap: 12 }}>
@@ -335,6 +348,92 @@ function Row({ icon, children }: RowProps) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{ flexShrink: 0 }}>{icon}</div>
       <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+    </div>
+  )
+}
+
+interface AssignmentDurationControlProps {
+  assignment: Assignment
+  dayId: number
+  placeDurationMinutes?: number | null
+  onUpdateAssignmentDuration?: (assignmentId: number, dayId: number, durationMinutes: number) => Promise<void> | void
+  t: (key: string, params?: Record<string, string | number>) => string
+}
+
+function AssignmentDurationControl({
+  assignment,
+  dayId,
+  placeDurationMinutes,
+  onUpdateAssignmentDuration,
+  t,
+}: AssignmentDurationControlProps) {
+  const toast = useToast()
+  const currentMinutes = parseDurationMinutes(
+    assignment.duration_minutes ?? assignment.place?.duration_minutes ?? placeDurationMinutes,
+  ) ?? 60
+  const inputId = `assignment-duration-${assignment.id}`
+  const [value, setValue] = useState(formatDurationInput(currentMinutes))
+  const [isSaving, setIsSaving] = useState(false)
+
+  useEffect(() => {
+    setValue(formatDurationInput(currentMinutes))
+  }, [assignment.id, currentMinutes])
+
+  const commitDuration = useCallback(async () => {
+    const parsed = parseDurationMinutes(value)
+    if (parsed == null) {
+      setValue(formatDurationInput(currentMinutes))
+      toast.error(t('places.durationInvalid'))
+      return
+    }
+    if (parsed === currentMinutes) {
+      setValue(formatDurationInput(parsed))
+      return
+    }
+    if (!onUpdateAssignmentDuration) return
+
+    setIsSaving(true)
+    try {
+      await onUpdateAssignmentDuration(assignment.id, dayId, parsed)
+      setValue(formatDurationInput(parsed))
+    } catch (err: unknown) {
+      setValue(formatDurationInput(currentMinutes))
+      toast.error(err instanceof Error ? err.message : t('common.unknownError'))
+    } finally {
+      setIsSaving(false)
+    }
+  }, [assignment.id, currentMinutes, dayId, onUpdateAssignmentDuration, t, toast, value])
+
+  return (
+    <div className="bg-surface-hover" style={{ borderRadius: 10, padding: '8px 10px', display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 8, alignItems: 'center' }}>
+      <Clock size={14} color="var(--text-faint)" />
+      <div style={{ minWidth: 0 }}>
+        <label htmlFor={inputId} className="text-content-faint" style={{ display: 'block', fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 5 }}>
+          {t('places.durationMinutes')}
+        </label>
+        <input
+          id={inputId}
+          type="text"
+          inputMode="text"
+          value={value}
+          disabled={!onUpdateAssignmentDuration || isSaving}
+          onChange={e => setValue(e.target.value)}
+          onBlur={() => { void commitDuration() }}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.currentTarget.blur()
+            }
+            if (e.key === 'Escape') {
+              setValue(formatDurationInput(currentMinutes))
+              e.currentTarget.blur()
+            }
+          }}
+          placeholder={t('places.durationPlaceholder')}
+          className="form-input"
+          style={{ width: '100%' }}
+        />
+      </div>
     </div>
   )
 }
@@ -560,12 +659,6 @@ function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameIn
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, marginTop: 6 }}>
                 <MapPin size={11} color="var(--text-faint)" style={{ flexShrink: 0, marginTop: 2 }} />
                 <span className="text-content-muted" style={{ fontSize: 12, lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{place.address}</span>
-              </div>
-            )}
-            {place.place_time && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
-                <Clock size={10} color="var(--text-faint)" style={{ flexShrink: 0 }} />
-                <span className="text-content-muted" style={{ fontSize: 12 }}>{formatTime(place.place_time, locale, timeFormat)}{place.end_time ? ` – ${formatTime(place.end_time, locale, timeFormat)}` : ''}</span>
               </div>
             )}
             {place.lat && place.lng && (

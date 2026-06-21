@@ -45,6 +45,7 @@ export interface Day {
   date?: string | null;
   notes?: string | null;
   title?: string | null;
+  wake_up_time?: string | null;
 }
 
 export interface Place {
@@ -98,6 +99,7 @@ export interface DayAssignment {
   place_id: number;
   order_index: number;
   notes?: string | null;
+  duration_minutes?: number | null;
   reservation_status?: string;
   reservation_notes?: string | null;
   reservation_datetime?: string | null;
