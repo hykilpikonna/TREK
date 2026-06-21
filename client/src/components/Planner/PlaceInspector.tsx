@@ -7,7 +7,7 @@ import { X, Clock, MapPin, ExternalLink, Phone, Euro, Edit2, Trash2, Plus, Minus
 import PlaceAvatar from '../shared/PlaceAvatar'
 import { mapsApi } from '../../api/client'
 import { useSettingsStore } from '../../store/settingsStore'
-import { getCategoryIcon } from '../shared/categoryIcons'
+import { getCategoryIcon, isEmojiCategoryIcon } from '../shared/categoryIcons'
 import { useToast } from '../shared/Toast'
 import { useTranslation } from '../../i18n'
 import type { Place, Category, Day, Assignment, Reservation, TripFile, AssignmentsMap } from '../../types'
@@ -539,6 +539,7 @@ function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameIn
               )}
               {category && (() => {
                 const CatIcon = getCategoryIcon(category.icon)
+                const emojiIcon = isEmojiCategoryIcon(category.icon) ? category.icon : null
                 return (
                   <span style={{
                     display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -548,7 +549,11 @@ function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameIn
                     border: `1px solid ${category.color ? `${category.color}30` : 'transparent'}`,
                     padding: '2px 8px', borderRadius: 99,
                   }}>
-                    <CatIcon size={10} />
+                    {emojiIcon ? (
+                      <span style={{ fontSize: 10, lineHeight: 1 }}>{emojiIcon}</span>
+                    ) : (
+                      <CatIcon size={10} />
+                    )}
                     <span className="hidden sm:inline">{category.name}</span>
                   </span>
                 )
