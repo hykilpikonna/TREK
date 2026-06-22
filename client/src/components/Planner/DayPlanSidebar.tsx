@@ -74,7 +74,8 @@ function localDateTimeForDayMinute(day: Pick<Day, 'date'>, minutes: number): str
 }
 
 function normalizeRoutingProvider(value: unknown): RoutingProvider {
-  return value === 'google_maps' ? 'google_maps' : 'osrm'
+  if (value === 'google_maps' || value === 'google_maps_mobile') return value
+  return 'osrm'
 }
 
 function normalizeRoutingOptimism(value: unknown): number {
@@ -497,7 +498,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
 
         const map: Record<number, RouteSegment> = {}
 
-        if (routeProvider === 'google_maps') {
+        if (routeProvider === 'google_maps' || routeProvider === 'google_maps_mobile') {
           let cursor = parseTimeToMinutes(day.wake_up_time || DEFAULT_WAKE_UP_TIME) ?? parseTimeToMinutes(DEFAULT_WAKE_UP_TIME)!
           const timedLeg = async (
             a: { lat: number; lng: number },
