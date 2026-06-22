@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Modal from '../shared/Modal'
-import { Calendar, Camera, X, Clipboard, UserPlus, Bell } from 'lucide-react'
+import { Calendar, Camera, X, Clipboard, UserPlus, Bell, Clock } from 'lucide-react'
 import { tripsApi, authApi } from '../../api/client'
 import CustomSelect from '../shared/CustomSelect'
 import { useAuthStore } from '../../store/authStore'
@@ -9,6 +9,7 @@ import { useToast } from '../shared/Toast'
 import { useTranslation } from '../../i18n'
 import { CustomDatePicker } from '../shared/CustomDateTimePicker'
 import { normalizeImageFile } from '../../utils/convertHeic'
+import { formatDurationInput, parseDurationMinutes } from '../../utils/durationInput'
 import type { Trip } from '../../types'
 import type { TripCreateRequest } from '@trek/shared'
 
@@ -40,6 +41,7 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
     start_date: '',
     end_date: '',
     reminder_days: 0 as number,
+    schedule_margin_minutes: '0m',
     day_count: 7 as number | '',
   })
   const [customReminder, setCustomReminder] = useState(false)
@@ -62,12 +64,13 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         start_date: trip.start_date || '',
         end_date: trip.end_date || '',
         reminder_days: rd,
+        schedule_margin_minutes: formatDurationInput(trip.schedule_margin_minutes ?? 0, { allowZero: true }),
         day_count: trip.day_count || 7,
       })
       setCustomReminder(![0, 1, 3, 9].includes(rd))
       setCoverPreview(trip.cover_image || null)
     } else {
-      setFormData({ title: '', description: '', start_date: '', end_date: '', reminder_days: tripRemindersEnabled ? 3 : 0, day_count: 7 })
+      setFormData({ title: '', description: '', start_date: '', end_date: '', reminder_days: tripRemindersEnabled ? 3 : 0, schedule_margin_minutes: '0m', day_count: 7 })
       setCustomReminder(false)
       setCoverPreview(null)
     }
@@ -106,6 +109,10 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         setError(t('dashboard.dayCountRequired')); return
       }
     }
+    const scheduleMargin = parseDurationMinutes(formData.schedule_margin_minutes, { allowZero: true })
+    if (scheduleMargin == null) {
+      setError(t('trips.scheduleMarginInvalid')); return
+    }
     setIsLoading(true)
     try {
       const result = await onSave({
@@ -114,6 +121,7 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         start_date: formData.start_date || null,
         end_date: formData.end_date || null,
         reminder_days: formData.reminder_days,
+        schedule_margin_minutes: scheduleMargin,
         ...(!formData.start_date && !formData.end_date ? { day_count: Number(formData.day_count) } : {}),
       })
       const createdTrip = result ? result.trip : undefined
@@ -336,6 +344,23 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
             <p className="text-xs text-slate-400 mt-1.5">{t('dashboard.dayCountHint')}</p>
           </div>
         )}
+
+        <div>
+          <label htmlFor="trip-schedule-margin-input" className="block text-sm font-medium text-slate-700 mb-1.5">
+            <Clock className="inline w-4 h-4 mr-1" />{t('trips.scheduleMargin')}
+          </label>
+          <input
+            id="trip-schedule-margin-input"
+            type="text"
+            inputMode="text"
+            value={formData.schedule_margin_minutes}
+            onChange={e => canEditTrip && update('schedule_margin_minutes', e.target.value)}
+            readOnly={!canEditTrip}
+            placeholder={t('places.durationPlaceholder')}
+            className={inputCls}
+          />
+          <p className="text-xs text-slate-400 mt-1.5">{t('trips.scheduleMarginHint')}</p>
+        </div>
 
         {/* Reminder — only visible to owner (or when creating) */}
         {(!isEditing || trip?.user_id === currentUser?.id || currentUser?.role === 'admin') && (

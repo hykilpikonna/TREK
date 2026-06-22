@@ -62,6 +62,10 @@ function minutesAfterClock(clock: string, startMinutes: number): number {
   return parsed >= startMinutes ? parsed - startMinutes : parsed + DAY_MINUTES - startMinutes
 }
 
+function formatRestHours(totalMinutes: number): string {
+  return `${(Math.max(0, Math.round(totalMinutes)) / 60).toFixed(1)}h`
+}
+
 interface DayPlanSidebarProps {
   tripId: number
   trip: Trip
@@ -1278,14 +1282,18 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           const activityAssignments = placeItems.map(i => i.data as Assignment)
           const renderedRouteLegs = dayRouteLegs[day.id] || {}
           const renderedHotelLegs = dayHotelLegs[day.id] || {}
+          const scheduleMarginMinutes = Math.max(0, Math.round(Number(trip?.schedule_margin_minutes) || 0))
           const travelAfterAssignmentMinutes = Object.fromEntries(
             activityAssignments.map(a => [a.id, routeSecondsToMinutes(renderedRouteLegs[a.id]?.duration)])
           )
-          const scheduleTravel = routeShown ? {
+          const scheduleTravel = {
+            scheduleMarginMinutes,
+            ...(routeShown ? {
             initialTravelMinutes: routeSecondsToMinutes(renderedHotelLegs.top?.seg.duration),
             travelAfterAssignmentMinutes,
             finalTravelMinutes: routeSecondsToMinutes(renderedHotelLegs.bottom?.seg.duration),
-          } : {}
+            } : {}),
+          }
           const activitySchedule = buildActivitySchedule(day, activityAssignments, scheduleTravel)
           const maxSleep = getMaxSleepMinutes(day, activityAssignments, days[index + 1], scheduleTravel)
           const wakeUpTime = day.wake_up_time || DEFAULT_WAKE_UP_TIME
@@ -1335,7 +1343,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                 pushRouteBlock(
                   `${day.id}-${block.assignment.id}`,
                   renderedRouteLegs[block.assignment.id],
-                  block.topMinutes + block.durationMinutes + block.slot.marginAfterMinutes,
+                  block.topMinutes + block.durationMinutes + scheduleMarginMinutes,
                 )
               }
               const lastBlock = calendarBlocks[calendarBlocks.length - 1]
@@ -1344,7 +1352,11 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                 pushRouteBlock(
                   `${day.id}-end`,
                   renderedHotelLegs.bottom?.seg,
-                  lastBlock.topMinutes + lastBlock.durationMinutes + lastBlock.slot.marginAfterMinutes + afterLast,
+                  lastBlock.topMinutes
+                    + lastBlock.durationMinutes
+                    + scheduleMarginMinutes
+                    + afterLast
+                    + (afterLast > 0 ? scheduleMarginMinutes : 0),
                 )
               }
             }
@@ -1352,18 +1364,28 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           })() : []
           const calendarContentMinutes = Math.max(
             8 * 60,
-            ...calendarBlocks.map(block => block!.topMinutes + block!.durationMinutes + block!.slot.marginAfterMinutes),
-            ...calendarRouteBlocks.map(block => block.topMinutes + block.durationMinutes),
+            ...calendarBlocks.map(block => block!.topMinutes + block!.durationMinutes + scheduleMarginMinutes),
+            ...calendarRouteBlocks.map(block => block.topMinutes + block.durationMinutes + scheduleMarginMinutes),
           )
           const calendarHourCount = Math.max(1, Math.ceil((calendarContentMinutes + 30) / 60))
           const calendarHeight = calendarHourCount * 60 * CALENDAR_MINUTE_HEIGHT
           const calendarDropIndex = String(dropTargetKey || '').startsWith(`calendar-${day.id}-`)
             ? Number(String(dropTargetKey).split('-').pop())
             : null
-          const getCalendarDropIndex = (e: React.DragEvent<HTMLDivElement>) => {
-            const y = e.clientY - e.currentTarget.getBoundingClientRect().top
+          const getCalendarDropIndex = (e: React.DragEvent<HTMLElement>) => {
+            const current = e.currentTarget as HTMLElement
+            const grid = current.getAttribute('data-testid') === `day-calendar-grid-${day.id}`
+              ? current
+              : current.closest(`[data-testid="day-calendar-grid-${day.id}"]`) as HTMLElement | null
+            const y = e.clientY - (grid ?? current).getBoundingClientRect().top
             const idx = calendarBlocks.findIndex(block => block && y < block.topPx + block.heightPx / 2)
             return idx === -1 ? calendarBlocks.length : idx
+          }
+          const handleCalendarDragOver = (e: React.DragEvent<HTMLElement>) => {
+            e.preventDefault()
+            e.stopPropagation()
+            e.dataTransfer.dropEffect = getDragData(e).placeId ? 'copy' : 'move'
+            setDropTargetKey(`calendar-${day.id}-${getCalendarDropIndex(e)}`)
           }
           const clearCalendarDrag = () => {
             setDraggingId(null)
@@ -1501,7 +1523,6 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, color: 'var(--text-faint)', fontWeight: 500 }}>
-                        <Clock size={10} strokeWidth={2} />
                         {t('dayplan.wake')}
                       </span>
                       {canEditDays && editingWakeUpDayId === day.id ? (
@@ -1559,7 +1580,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                       )}
                       <span style={{ width: 1, height: 10, background: 'var(--border-primary)' }} />
                       <span style={{ fontSize: 10.5, color: 'var(--text-faint)', fontWeight: 500 }}>
-                        {t('dayplan.maxSleep')} {formatDurationMinutes(maxSleep)}
+                        {t('dayplan.maxSleep')} {formatRestHours(maxSleep)}
                       </span>
                     </div>
                     {(() => {
@@ -1761,12 +1782,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                             background: 'transparent',
                             overflow: 'hidden',
                           }}
-                          onDragOver={e => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            e.dataTransfer.dropEffect = 'move'
-                            setDropTargetKey(`calendar-${day.id}-${getCalendarDropIndex(e)}`)
-                          }}
+                          onDragOver={handleCalendarDragOver}
                           onDrop={handleCalendarDrop}
                         >
                           {Array.from({ length: calendarHourCount + 1 }, (_, hour) => (
@@ -1862,6 +1878,8 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                   setDraggingId(assignment.id)
                                 }}
                                 onDragEnd={clearCalendarDrag}
+                                onDragOver={handleCalendarDragOver}
+                                onDrop={handleCalendarDrop}
                                 onClick={() => { onPlaceClick(isPlaceSelected ? null : place.id, isPlaceSelected ? null : assignment.id); if (!isPlaceSelected) onSelectDay(day.id, true) }}
                                 onContextMenu={e => ctxMenu.open(e, [
                                   canEditDays && onEditPlace && { label: t('common.edit'), icon: Pencil, onClick: () => onEditPlace(place, assignment.id) },
