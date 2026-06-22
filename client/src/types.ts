@@ -140,6 +140,7 @@ export interface RouteSegment {
   drivingText: string
   distanceText: string
   durationText?: string
+  tollText?: string
 }
 
 export interface RouteWithLegs {
