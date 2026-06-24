@@ -18,6 +18,7 @@ interface KategorieGruppeProps {
   allCategories: string[]
   onRename: (oldName: string, newName: string) => Promise<void>
   onDeleteAll: (items: PackingItem[]) => Promise<void>
+  onDeleteItem: (item: PackingItem) => Promise<void>
   onAddItem: (category: string, name: string) => Promise<void>
   assignees: CategoryAssignee[]
   tripMembers: TripMember[]
@@ -28,7 +29,7 @@ interface KategorieGruppeProps {
   canEdit?: boolean
 }
 
-export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRename, onDeleteAll, onAddItem, assignees, tripMembers, onSetAssignees, bagTrackingEnabled, bags, onCreateBag, canEdit = true }: KategorieGruppeProps) {
+export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRename, onDeleteAll, onDeleteItem, onAddItem, assignees, tripMembers, onSetAssignees, bagTrackingEnabled, bags, onCreateBag, canEdit = true }: KategorieGruppeProps) {
   const [offen, setOffen] = useState(true)
   const [editingName, setEditingName] = useState(false)
   const [editKatName, setEditKatName] = useState(kategorie)
@@ -231,7 +232,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
       {offen && (
         <div style={{ padding: '4px 4px 6px' }}>
           {items.map(item => (
-            <ArtikelZeile key={item.id} item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit} />
+            <ArtikelZeile key={item.id} item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit} />
           ))}
           {/* Inline add item */}
           {canEdit && (showAddItem ? (

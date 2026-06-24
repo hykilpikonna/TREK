@@ -301,6 +301,9 @@ const admin: TranslationStrings = {
   'admin.update.backupLink': '前往備份',
   'admin.update.howTo': '如何更新',
   'admin.update.dockerText': '你的 TREK 例項執行在 Docker 中。要更新到 {version}，請在伺服器上執行以下命令：',
+  'admin.update.nonDockerText':
+    '此 TREK 例項並非執行在 Docker 中。要更新到 {version}，請重新執行你當初使用的安裝或更新方式——例如在 Proxmox Community Scripts 上，請從 LXC 主控臺執行更新：',
+  'admin.update.wikiLink': '開啟更新指南',
   'admin.update.reloadHint': '請在幾秒後重新整理頁面。',
   'admin.tabs.permissions': '許可權',
   'admin.addons.catalog.journey.name': '旅程',

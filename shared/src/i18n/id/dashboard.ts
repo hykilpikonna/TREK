@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Sudah lewat',
   'dashboard.status.daysLeft': '{count} hari lagi',
   'dashboard.toast.loadError': 'Gagal memuat perjalanan',
+  'dashboard.loadErrorBanner': 'Tidak dapat terhubung ke server. Perjalananmu aman — silakan coba lagi.',
+  'dashboard.retry': 'Coba lagi',
   'dashboard.toast.created': 'Perjalanan berhasil dibuat!',
   'dashboard.toast.createError': 'Gagal membuat perjalanan',
   'dashboard.toast.updated': 'Perjalanan diperbarui!',

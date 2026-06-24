@@ -289,7 +289,7 @@ export function useTripPlanner() {
     })
   }, [places, mapCategoryFilter, mapPlacesFilter, assignments, expandedDayIds])
 
-  const { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation({ assignments } as any, selectedDayId, routeShown, routeProfile)
+  const { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation({ assignments } as any, selectedDayId, routeShown, routeProfile, tripAccommodations)
 
   const handleSelectDay = useCallback((dayId: number | null, skipFit?: boolean) => {
     const changed = dayId !== selectedDayId

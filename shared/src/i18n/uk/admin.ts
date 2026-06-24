@@ -270,6 +270,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Як оновити',
   'admin.update.dockerText':
     'Ваш екземпляр TREK працює в Docker. Для оновлення до {version} виконайте ці команди на сервері:',
+  'admin.update.nonDockerText':
+    'Цей екземпляр TREK не працює в Docker. Щоб оновити до {version}, повторно запустіть метод встановлення або оновлення, який ви використовували, — наприклад, у Proxmox Community Scripts запустіть оновлення з консолі LXC:',
+  'admin.update.wikiLink': 'Відкрити інструкцію з оновлення',
   'admin.update.reloadHint': 'Перезавантажте сторінку через кілька секунд.',
   'admin.tabs.permissions': 'Дозволи',
   'admin.notifications.emailPanel.title': 'Email (SMTP)',

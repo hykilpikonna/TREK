@@ -84,6 +84,7 @@ export default function DashboardPage(): React.ReactElement {
   const {
     demoMode, locale, t, navigate,
     spotlight, heroBundle, stats, upcoming, gridTrips, isLoading,
+    loadError, retryLoad,
     tripFilter, setTripFilter, viewMode, toggleViewMode,
     showForm, setShowForm, editingTrip, setEditingTrip,
     deleteTrip, setDeleteTrip, copyTrip, setCopyTrip, setTrips,
@@ -102,6 +103,15 @@ export default function DashboardPage(): React.ReactElement {
         <MobileTopBar />
         <main className="page">
           <div className="page-main">
+            {loadError && (
+              <div className="dash-error" role="alert">
+                <span className="dash-error-txt">{t('dashboard.loadErrorBanner')}</span>
+                <button className="dash-error-retry" onClick={retryLoad}>
+                  <RefreshCw size={15} />
+                  {t('dashboard.retry')}
+                </button>
+              </div>
+            )}
             {spotlight && (
               <BoardingPassHero
                 trip={spotlight}
@@ -131,6 +141,13 @@ export default function DashboardPage(): React.ReactElement {
                   </button>
                 </div>
               </div>
+
+              {gridTrips.length === 0 && tripFilter === 'planned' && !isLoading && !loadError && (
+                <div className="trips-empty">
+                  <h4>{t('dashboard.emptyTitle')}</h4>
+                  <p>{t('dashboard.emptyText')}</p>
+                </div>
+              )}
 
               <div className={`trips${viewMode === 'list' ? ' list-view' : ''}`}>
                 {gridTrips.map(trip => (

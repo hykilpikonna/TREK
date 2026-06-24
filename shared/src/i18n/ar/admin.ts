@@ -284,6 +284,9 @@ const admin: TranslationStrings = {
   'admin.update.backupLink': 'الذهاب إلى النسخ الاحتياطي',
   'admin.update.howTo': 'كيفية التحديث',
   'admin.update.dockerText': 'يعمل TREK الخاص بك في Docker. للتحديث إلى {version}، نفّذ الأوامر التالية على الخادم:',
+  'admin.update.nonDockerText':
+    'لا يعمل TREK هذا في Docker. للتحديث إلى {version}، أعد تشغيل طريقة التثبيت أو التحديث التي استخدمتها — على سبيل المثال، في Proxmox Community Scripts نفّذ التحديث من وحدة تحكم LXC:',
+  'admin.update.wikiLink': 'فتح دليل التحديث',
   'admin.update.reloadHint': 'يرجى إعادة تحميل الصفحة بعد بضع ثوانٍ.',
   'admin.tabs.permissions': 'الصلاحيات',
   'admin.notifications.webhook': 'Webhook', // en-fallback

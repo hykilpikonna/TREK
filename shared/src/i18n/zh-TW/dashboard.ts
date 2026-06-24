@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': '已結束',
   'dashboard.status.daysLeft': '還剩 {count} 天',
   'dashboard.toast.loadError': '載入旅行失敗',
+  'dashboard.loadErrorBanner': '無法連線到伺服器。你的旅行資料安全無虞——請稍後再試。',
+  'dashboard.retry': '重試',
   'dashboard.toast.created': '旅行建立成功！',
   'dashboard.toast.createError': '建立旅行失敗',
   'dashboard.toast.updated': '旅行已更新！',

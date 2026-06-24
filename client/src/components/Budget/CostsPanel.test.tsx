@@ -107,7 +107,7 @@ describe('CostsPanel — settlements in the ledger', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Add expense' }))
     await user.type(await screen.findByPlaceholderText('e.g. Dinner, souvenirs, gas…'), 'Dinner')
-    const nums = () => screen.getAllByRole('spinbutton') as HTMLInputElement[]
+    const nums = () => screen.getAllByPlaceholderText('0.00') as HTMLInputElement[]
     await user.type(nums()[0], '100') // total → auto equal-split across the 2 participants
     await waitFor(() => expect(nums()[1].value).toBe('50'))
     expect(nums()[2].value).toBe('50')
@@ -125,6 +125,30 @@ describe('CostsPanel — settlements in the ledger', () => {
     ]))
   })
 
+  it('accepts a comma as the decimal separator in the total amount (#1256)', async () => {
+    let posted: Record<string, unknown> | null = null
+    server.use(
+      http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+      http.get('/api/trips/1/budget/settlement', () => HttpResponse.json({ balances: [], flows: [], settlements: [] })),
+      http.post('/api/trips/1/budget', async ({ request }) => {
+        posted = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ item: { ...buildBudgetItem({ trip_id: 1, name: 'AirTags' }), id: 6 } })
+      }),
+    )
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    render(<CostsPanel tripId={1} tripMembers={tripMembers} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Add expense' }))
+    await user.type(await screen.findByPlaceholderText('e.g. Dinner, souvenirs, gas…'), 'AirTags')
+    await user.type(screen.getAllByPlaceholderText('0.00')[0], '39,99') // comma → normalized to 39.99
+
+    const addBtns = screen.getAllByRole('button', { name: 'Add expense' })
+    await user.click(addBtns[addBtns.length - 1]) // footer submit
+    await waitFor(() => expect(posted).toBeTruthy())
+    expect(posted!.total_price).toBe(39.99)
+  })
+
   it('marks an expense with no payer as Unfinished', async () => {
     const item = { ...buildBudgetItem({ trip_id: 1, category: 'food', name: 'Hotel' }), total_price: 90, payers: [], members: [{ user_id: 1, username: 'alice', paid: 0 }] }
     server.use(
@@ -134,5 +158,40 @@ describe('CostsPanel — settlements in the ledger', () => {
     render(<CostsPanel tripId={1} tripMembers={tripMembers} />)
     await screen.findByText('Hotel')
     expect(screen.getByText('Unfinished')).toBeInTheDocument()
+  })
+
+  it('records a recorded-total expense with nobody to split with (#1286)', async () => {
+    let posted: Record<string, unknown> | null = null
+    server.use(
+      http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+      http.get('/api/trips/1/budget/settlement', () => HttpResponse.json({ balances: [], flows: [], settlements: [] })),
+      http.post('/api/trips/1/budget', async ({ request }) => {
+        posted = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ item: { ...buildBudgetItem({ trip_id: 1, name: 'Hotel' }), id: 9 } })
+      }),
+    )
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    render(<CostsPanel tripId={1} tripMembers={tripMembers} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Add expense' }))
+    await user.type(await screen.findByPlaceholderText('e.g. Dinner, souvenirs, gas…'), 'Hotel')
+    await user.type(screen.getAllByPlaceholderText('0.00')[0], '120') // total only, paid on-site later
+
+    // Deselect everyone — the cost is recorded without a split (the bug: this was blocked).
+    // The participant toggles are buttons; the same names also appear as plain text in
+    // the Balances sidebar, so target the buttons specifically.
+    await user.click(screen.getByRole('button', { name: /alice/i }))
+    await user.click(screen.getByRole('button', { name: /bob/i }))
+
+    const addBtns = screen.getAllByRole('button', { name: 'Add expense' })
+    const submit = addBtns[addBtns.length - 1] // footer submit
+    expect(submit).not.toBeDisabled()
+    await user.click(submit)
+
+    await waitFor(() => expect(posted).toBeTruthy())
+    expect(posted!.total_price).toBe(120)
+    expect(posted!.member_ids).toEqual([])
+    expect(posted!.payers).toEqual([])
   })
 })

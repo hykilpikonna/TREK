@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Afgelopen',
   'dashboard.status.daysLeft': 'nog {count} dagen',
   'dashboard.toast.loadError': 'Reizen laden mislukt',
+  'dashboard.loadErrorBanner': 'De server is niet bereikbaar. Je reizen zijn veilig — probeer het opnieuw.',
+  'dashboard.retry': 'Opnieuw proberen',
   'dashboard.toast.created': 'Reis aangemaakt!',
   'dashboard.toast.createError': 'Reis aanmaken mislukt',
   'dashboard.toast.updated': 'Reis bijgewerkt!',

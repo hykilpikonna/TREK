@@ -274,6 +274,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Comment mettre à jour',
   'admin.update.dockerText':
     'Votre instance TREK fonctionne dans Docker. Pour mettre à jour vers {version}, exécutez les commandes suivantes sur votre serveur :',
+  'admin.update.nonDockerText':
+    "Cette instance TREK ne fonctionne pas dans Docker. Pour mettre à jour vers {version}, relancez la méthode d'installation ou de mise à jour que vous avez utilisée — par exemple, sur Proxmox Community Scripts, lancez la mise à jour depuis la console LXC :",
+  'admin.update.wikiLink': 'Ouvrir le guide de mise à jour',
   'admin.update.reloadHint': 'Veuillez recharger la page dans quelques secondes.',
   'admin.tabs.permissions': 'Permissions',
   'admin.notifications.emailPanel.title': 'Email (SMTP)',

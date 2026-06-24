@@ -4,7 +4,7 @@ import { KategorieGruppe } from './PackingListPanelCategoryGroup'
 
 export function PackingList(S: PackingState) {
   const {
-    items, gruppiert, t, tripId, allCategories, handleRenameCategory, handleDeleteCategory,
+    items, gruppiert, t, tripId, allCategories, handleRenameCategory, handleDeleteCategory, handleDeleteItem,
     handleAddItemToCategory, categoryAssignees, tripMembers, handleSetAssignees,
     bagTrackingEnabled, bags, handleCreateBagByName, canEdit,
   } = S
@@ -31,6 +31,7 @@ export function PackingList(S: PackingState) {
               allCategories={allCategories}
               onRename={handleRenameCategory}
               onDeleteAll={handleDeleteCategory}
+              onDeleteItem={handleDeleteItem}
               onAddItem={handleAddItemToCategory}
               assignees={categoryAssignees[kat] || []}
               tripMembers={tripMembers}

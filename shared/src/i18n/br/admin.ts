@@ -241,6 +241,9 @@ const admin: TranslationStrings = {
   'admin.update.backupLink': 'Ir para Backup',
   'admin.update.howTo': 'Como atualizar',
   'admin.update.dockerText': 'Sua instância TREK roda no Docker. Para atualizar para {version}, execute no servidor:',
+  'admin.update.nonDockerText':
+    'Esta instância do TREK não está rodando no Docker. Para atualizar para {version}, execute novamente o método de instalação ou atualização que você usou — por exemplo, no Proxmox Community Scripts, execute a atualização a partir do console do LXC:',
+  'admin.update.wikiLink': 'Abrir o guia de atualização',
   'admin.update.reloadHint': 'Recarregue a página em alguns segundos.',
   'admin.tabs.permissions': 'Permissões',
   'admin.tabs.mcpTokens': 'Acesso MCP',

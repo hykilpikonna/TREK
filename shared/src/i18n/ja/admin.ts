@@ -301,6 +301,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': '更新方法',
   'admin.update.dockerText':
     'TREKはDockerで実行されています。{version} に更新するには、サーバーで次のコマンドを実行してください：',
+  'admin.update.nonDockerText':
+    'このTREKインスタンスはDockerで実行されていません。{version} に更新するには、使用したインストールまたは更新方法をもう一度実行してください。たとえばProxmox Community Scriptsの場合は、LXCコンソールから更新を実行します：',
+  'admin.update.wikiLink': '更新ガイドを開く',
   'admin.update.reloadHint': '数秒後にページを再読み込みしてください。',
   'admin.tabs.permissions': '権限',
   'admin.addons.catalog.journey.name': '日記',

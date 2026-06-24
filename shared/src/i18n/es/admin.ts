@@ -256,6 +256,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Cómo actualizar',
   'admin.update.dockerText':
     'Tu instancia de TREK se ejecuta en Docker. Para actualizar a {version}, ejecuta los siguientes comandos en tu servidor:',
+  'admin.update.nonDockerText':
+    'Esta instancia de TREK no se ejecuta en Docker. Para actualizar a {version}, vuelve a ejecutar el método de instalación o actualización que utilizaste; por ejemplo, en Proxmox Community Scripts ejecuta la actualización desde la consola LXC:',
+  'admin.update.wikiLink': 'Abrir la guía de actualización',
   'admin.update.reloadHint': 'Recarga la página en unos segundos.',
   'admin.addons.catalog.memories.name': 'Fotos (Immich)',
   'admin.addons.catalog.memories.description': 'Comparte fotos de viaje a través de tu instancia de Immich',

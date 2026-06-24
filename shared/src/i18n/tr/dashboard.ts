@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Geçmiş',
   'dashboard.status.daysLeft': '{count} gün kaldı',
   'dashboard.toast.loadError': 'Seyahatler yüklenemedi',
+  'dashboard.loadErrorBanner': 'Sunucuya ulaşılamadı. Seyahatleriniz güvende — lütfen tekrar deneyin.',
+  'dashboard.retry': 'Tekrar dene',
   'dashboard.toast.created': 'Seyahat oluşturuldu!',
   'dashboard.toast.createError': 'Seyahat oluşturulamadı',
   'dashboard.toast.updated': 'Seyahat güncellendi!',

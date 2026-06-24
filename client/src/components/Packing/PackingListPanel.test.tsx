@@ -174,7 +174,9 @@ describe('PackingListPanel', () => {
 
   it('FE-COMP-PACKING-016: delete item button exists and triggers API call', async () => {
     const user = userEvent.setup();
-    const item = buildPackingItem({ id: 99, name: 'To Remove', category: 'Test' });
+    // Uncategorized item: deleting it is a plain DELETE (a custom category's last
+    // item is instead converted to a placeholder — see FE-COMP-PACKING-070).
+    const item = buildPackingItem({ id: 99, name: 'To Remove', category: null });
     let deleteCalled = false;
     server.use(
       http.delete('/api/trips/1/packing/99', () => {
@@ -1414,5 +1416,84 @@ describe('PackingListPanel', () => {
 
     expect(clickSpy).toHaveBeenCalled();
     clickSpy.mockRestore();
+  });
+
+  it('FE-COMP-PACKING-070: deleting the last item of a custom category converts the row to a placeholder so the category persists in place (#1289)', async () => {
+    const user = userEvent.setup();
+    const item = buildPackingItem({ id: 99, name: 'Tent', category: 'Camping Gear' });
+    // handleDeleteItem decides "last in category" from the rendered list.
+    seedStore(useTripStore, { packingItems: [item] });
+    let deleted = false;
+    let putBody: Record<string, unknown> | null = null;
+    server.use(
+      http.delete('/api/trips/1/packing/99', () => {
+        deleted = true;
+        return HttpResponse.json({ success: true });
+      }),
+      http.put('/api/trips/1/packing/99', async ({ request }) => {
+        putBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ item: buildPackingItem({ id: 99, name: '...', category: 'Camping Gear' }) });
+      })
+    );
+    render(<PackingListPanel tripId={1} items={[item]} />);
+
+    await user.click(screen.getByTitle('Delete'));
+
+    // The row is updated in place (same id) rather than deleted, so colour/position hold.
+    await waitFor(() => expect(putBody).toMatchObject({ name: '...' }));
+    expect(deleted).toBe(false);
+  });
+
+  it('FE-COMP-PACKING-071: deleting the placeholder row deletes it, dismissing the empty category (#1289)', async () => {
+    const user = userEvent.setup();
+    const placeholder = buildPackingItem({ id: 5, name: '...', category: 'Camping Gear' });
+    seedStore(useTripStore, { packingItems: [placeholder] });
+    let deleted = false;
+    let converted = false;
+    server.use(
+      http.delete('/api/trips/1/packing/5', () => {
+        deleted = true;
+        return HttpResponse.json({ success: true });
+      }),
+      http.put('/api/trips/1/packing/5', () => {
+        converted = true;
+        return HttpResponse.json({ item: placeholder });
+      })
+    );
+    render(<PackingListPanel tripId={1} items={[placeholder]} />);
+
+    await user.click(screen.getByTitle('Delete'));
+
+    await waitFor(() => expect(deleted).toBe(true));
+    // It is the placeholder itself — it must be removed, not re-converted.
+    expect(converted).toBe(false);
+  });
+
+  it('FE-COMP-PACKING-072: adding an item to an empty category reuses the placeholder row instead of appending (#1289)', async () => {
+    const user = userEvent.setup();
+    const placeholder = buildPackingItem({ id: 5, name: '...', category: 'Camping Gear' });
+    seedStore(useTripStore, { packingItems: [placeholder] });
+    let posted = false;
+    let putBody: Record<string, unknown> | null = null;
+    server.use(
+      http.post('/api/trips/1/packing', () => {
+        posted = true;
+        return HttpResponse.json({ item: buildPackingItem({ id: 6 }) });
+      }),
+      http.put('/api/trips/1/packing/5', async ({ request }) => {
+        putBody = await request.json() as Record<string, unknown>;
+        return HttpResponse.json({ item: buildPackingItem({ id: 5, name: 'Tent', category: 'Camping Gear' }) });
+      })
+    );
+    render(<PackingListPanel tripId={1} items={[placeholder]} />);
+
+    // Open the category's inline "Add item" and add a real entry.
+    await user.click(screen.getByText('Add item'));
+    const input = await screen.findByPlaceholderText('Item name...');
+    await user.type(input, 'Tent');
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(putBody).toMatchObject({ name: 'Tent' }));
+    expect(posted).toBe(false);
   });
 });

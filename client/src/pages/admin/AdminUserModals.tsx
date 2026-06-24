@@ -229,12 +229,24 @@ export default function AdminUserModals({ admin, t }: AdminUserModalsProps): Rea
 
             <div style={{ padding: '20px 24px' }}>
               <p className="text-gray-700 dark:text-gray-300" style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                {t('admin.update.dockerText').replace('{version}', `v${updateInfo?.latest ?? ''}`)}
+                {(updateInfo?.is_docker === false ? t('admin.update.nonDockerText') : t('admin.update.dockerText')).replace('{version}', `v${updateInfo?.latest ?? ''}`)}
               </p>
 
-              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, fontSize: 12, lineHeight: 1.8, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-                className="bg-gray-900 dark:bg-gray-950 text-gray-100 border border-gray-700"
-              >
+              {updateInfo?.is_docker === false ? (
+                <a
+                  href="https://github.com/mauriceboe/TREK/wiki/Updating"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, fontSize: 13, lineHeight: 1.5, display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}
+                  className="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
+                >
+                  <ExternalLink className="w-4 h-4 flex-shrink-0" />
+                  <span className="font-semibold underline">{t('admin.update.wikiLink')}</span>
+                </a>
+              ) : (
+                <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, fontSize: 12, lineHeight: 1.8, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+                  className="bg-gray-900 dark:bg-gray-950 text-gray-100 border border-gray-700"
+                >
 {`docker pull mauriceboe/trek:latest
 docker stop trek && docker rm trek
 docker run -d --name trek \\
@@ -243,7 +255,8 @@ docker run -d --name trek \\
   -v /opt/trek/uploads:/app/uploads \\
   --restart unless-stopped \\
   mauriceboe/trek:latest`}
-              </div>
+                </div>
+              )}
 
               <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5 }}
                 className="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"

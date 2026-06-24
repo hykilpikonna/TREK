@@ -25,6 +25,11 @@ interface AuthState {
   user: User | null
   isAuthenticated: boolean
   isLoading: boolean
+  /** The auth check (loadUser) failed for a non-401 reason while we were online —
+   *  the server was unreachable or erroring. Surfaced by the UI so a backend/IdP
+   *  outage doesn't render as a blank, error-free page that looks like lost data.
+   *  Transient, never persisted. #1283 */
+  authCheckFailed: boolean
   error: string | null
   demoMode: boolean
   devMode: boolean
@@ -86,6 +91,7 @@ export const useAuthStore = create<AuthState>()(
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  authCheckFailed: false,
   error: null,
   demoMode: localStorage.getItem('demo_mode') === 'true',
   devMode: false,
@@ -200,6 +206,7 @@ export const useAuthStore = create<AuthState>()(
     set({
       user: null,
       isAuthenticated: false,
+      authCheckFailed: false,
       error: null,
     })
   },
@@ -215,22 +222,33 @@ export const useAuthStore = create<AuthState>()(
         user: data.user,
         isAuthenticated: true,
         isLoading: false,
+        authCheckFailed: false,
       })
       await onAuthSuccess(data.user.id)
       connect()
     } catch (err: unknown) {
       if (seq !== authSequence) return // stale response — ignore
-      // Only clear auth state on 401 (invalid/expired token), not on network errors
-      const isAuthError = err && typeof err === 'object' && 'response' in err &&
-        (err as { response?: { status?: number } }).response?.status === 401
-      if (isAuthError) {
+      const status = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { status?: number } }).response?.status
+        : undefined
+      if (status === 401) {
+        // Invalid/expired token — clear auth so the guard redirects to login.
         set({
           user: null,
           isAuthenticated: false,
           isLoading: false,
+          authCheckFailed: false,
         })
-      } else {
+      } else if (status === undefined && typeof navigator !== 'undefined' && !navigator.onLine) {
+        // Genuinely offline — keep the persisted session so the PWA serves cached
+        // data without a scary error. This is the offline-first happy path.
         set({ isLoading: false })
+      } else {
+        // Server erroring (5xx) or unreachable while we're online: keep the session
+        // (don't eject the user over a transient outage), but flag it so the UI can
+        // say "couldn't reach the server" instead of showing a blank, error-free
+        // page that looks like the user's trips were lost. #1283
+        set({ isLoading: false, authCheckFailed: true })
       }
     }
   },

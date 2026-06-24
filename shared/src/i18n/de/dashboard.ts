@@ -43,6 +43,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Vergangen',
   'dashboard.status.daysLeft': 'Noch {count} Tage',
   'dashboard.toast.loadError': 'Fehler beim Laden der Reisen',
+  'dashboard.loadErrorBanner': 'Server nicht erreichbar. Deine Reisen sind sicher — bitte versuche es erneut.',
+  'dashboard.retry': 'Erneut versuchen',
   'dashboard.toast.created': 'Reise erfolgreich erstellt!',
   'dashboard.toast.createError': 'Fehler beim Erstellen',
   'dashboard.toast.updated': 'Reise aktualisiert!',

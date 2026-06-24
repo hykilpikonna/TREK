@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Past',
   'dashboard.status.daysLeft': '{count} days left',
   'dashboard.toast.loadError': 'Failed to load trips',
+  'dashboard.loadErrorBanner': "Couldn't reach the server. Your trips are safe — please try again.",
+  'dashboard.retry': 'Retry',
   'dashboard.toast.created': 'Trip created successfully!',
   'dashboard.toast.createError': 'Failed to create trip',
   'dashboard.toast.updated': 'Trip updated!',

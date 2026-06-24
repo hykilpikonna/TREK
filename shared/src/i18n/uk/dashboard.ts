@@ -42,6 +42,9 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Минуло',
   'dashboard.status.daysLeft': 'залишилось {count} дн.',
   'dashboard.toast.loadError': 'Не вдалося завантажити поїздки',
+  'dashboard.loadErrorBanner':
+    "Не вдалося з'єднатися із сервером. Ваші поїздки в безпеці — будь ласка, спробуйте ще раз.",
+  'dashboard.retry': 'Спробувати ще раз',
   'dashboard.toast.created': 'Поїздка створена!',
   'dashboard.toast.createError': 'Не вдалося створити поїздку',
   'dashboard.toast.updated': 'Поїздка оновлена!',

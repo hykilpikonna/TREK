@@ -272,6 +272,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Update-Anleitung',
   'admin.update.dockerText':
     'Deine TREK-Instanz läuft in Docker. Um auf {version} zu aktualisieren, führe folgende Befehle auf deinem Server aus:',
+  'admin.update.nonDockerText':
+    'Diese TREK-Instanz läuft nicht in Docker. Um auf {version} zu aktualisieren, führe die Installations- oder Update-Methode erneut aus, die du verwendet hast — bei Proxmox Community Scripts startest du das Update zum Beispiel über die LXC-Konsole:',
+  'admin.update.wikiLink': 'Update-Anleitung öffnen',
   'admin.update.reloadHint': 'Bitte lade die Seite in wenigen Sekunden neu.',
   'admin.tabs.permissions': 'Berechtigungen',
   'admin.notifications.emailPanel.title': 'Email (SMTP)',

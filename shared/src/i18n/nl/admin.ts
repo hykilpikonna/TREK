@@ -272,6 +272,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Hoe bij te werken',
   'admin.update.dockerText':
     "Je TREK-instantie draait in Docker. Om bij te werken naar {version}, voer de volgende commando's uit op je server:",
+  'admin.update.nonDockerText':
+    'Deze TREK-instantie draait niet in Docker. Om bij te werken naar {version}, voer de installatie- of updatemethode die je hebt gebruikt opnieuw uit — bij Proxmox Community Scripts voer je de update bijvoorbeeld uit vanuit de LXC-console:',
+  'admin.update.wikiLink': 'Open de updatehandleiding',
   'admin.update.reloadHint': 'Herlaad de pagina over een paar seconden.',
   'admin.tabs.permissions': 'Rechten',
   'admin.notifications.emailPanel.title': 'Email (SMTP)',

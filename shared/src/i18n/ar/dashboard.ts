@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'منتهية',
   'dashboard.status.daysLeft': 'متبقي {count} يوم',
   'dashboard.toast.loadError': 'فشل تحميل الرحلات',
+  'dashboard.loadErrorBanner': 'تعذّر الوصول إلى الخادم. رحلاتك في أمان — يرجى المحاولة مرة أخرى.',
+  'dashboard.retry': 'إعادة المحاولة',
   'dashboard.toast.created': 'تم إنشاء الرحلة بنجاح',
   'dashboard.toast.createError': 'فشل إنشاء الرحلة',
   'dashboard.toast.updated': 'تم تحديث الرحلة',

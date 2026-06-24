@@ -33,6 +33,7 @@ export function useDashboard() {
   const [deleteTrip, setDeleteTrip] = useState<DashboardTrip | null>(null)
   const [copyTrip, setCopyTrip] = useState<DashboardTrip | null>(null)
   const [tripFilter, setTripFilter] = useState<'planned' | 'archive' | 'completed'>('planned')
+  const [loadError, setLoadError] = useState<boolean>(false)
 
   const [stats, setStats] = useState<TravelStats | null>(null)
   const [upcoming, setUpcoming] = useState<UpcomingReservation[]>([])
@@ -42,7 +43,7 @@ export function useDashboard() {
   const [searchParams, setSearchParams] = useSearchParams()
   const toast = useToast()
   const { t, locale } = useTranslation()
-  const { demoMode } = useAuthStore()
+  const { demoMode, authCheckFailed, loadUser } = useAuthStore()
 
   const toggleViewMode = () => {
     setViewMode(prev => {
@@ -74,11 +75,20 @@ export function useDashboard() {
       const { trips, archivedTrips } = await tripRepo.list()
       setTrips(sortTrips(trips))
       setArchivedTrips(sortTrips(archivedTrips))
+      setLoadError(false)
     } catch {
+      setLoadError(true)
       toast.error(t('dashboard.toast.loadError'))
     } finally {
       setIsLoading(false)
     }
+  }
+
+  // Re-run both the trip fetch and the auth check so a recovered backend clears
+  // the error banner (loadUser resets authCheckFailed on success). #1283
+  const retryLoad = () => {
+    loadUser({ silent: true })
+    loadTrips()
   }
 
   const today = new Date().toISOString().split('T')[0]
@@ -177,6 +187,7 @@ export function useDashboard() {
     demoMode, locale, t, navigate,
     // data + derived
     spotlight, heroBundle, stats, upcoming, gridTrips, isLoading,
+    loadError: loadError || authCheckFailed, retryLoad,
     // ui state
     tripFilter, setTripFilter, viewMode, toggleViewMode,
     showForm, setShowForm, editingTrip, setEditingTrip,

@@ -67,6 +67,27 @@ export async function calculateRoute(
   }
 }
 
+/**
+ * Prepends a hotel→first-waypoint run and appends a last-waypoint→hotel run to the
+ * day's activity runs, so the drawn route starts and ends at the day's accommodation
+ * (matching the sidebar's hotel connectors). A bookend is only added when both its
+ * hotel and the first/last located waypoint exist; passing nulls leaves `runs`
+ * untouched. The shared first/last waypoint is repeated so the polylines join.
+ */
+export function withHotelBookends(
+  runs: Waypoint[][],
+  firstWay: Waypoint | undefined,
+  lastWay: Waypoint | undefined,
+  startHotel: Waypoint | null,
+  endHotel: Waypoint | null,
+): Waypoint[][] {
+  const out: Waypoint[][] = []
+  if (startHotel && firstWay) out.push([startHotel, firstWay])
+  out.push(...runs)
+  if (endHotel && lastWay) out.push([lastWay, endHotel])
+  return out
+}
+
 export function generateGoogleMapsUrl(places: Waypoint[]): string | null {
   const valid = places.filter((p) => p.lat && p.lng)
   if (valid.length === 0) return null

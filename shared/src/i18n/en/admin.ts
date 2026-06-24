@@ -322,6 +322,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'How to Update',
   'admin.update.dockerText':
     'Your TREK instance runs in Docker. To update to {version}, run the following commands on your server:',
+  'admin.update.nonDockerText':
+    'This TREK instance is not running in Docker. To update to {version}, re-run the install or update method you used — for example, on Proxmox Community Scripts run the update from the LXC console:',
+  'admin.update.wikiLink': 'Open the update guide',
   'admin.update.reloadHint': 'Please reload the page in a few seconds.',
   'admin.tabs.permissions': 'Permissions',
   'admin.addons.catalog.journey.name': 'Journey',

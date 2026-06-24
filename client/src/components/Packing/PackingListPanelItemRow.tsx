@@ -15,13 +15,14 @@ interface ArtikelZeileProps {
   tripId: number
   categories: string[]
   onCategoryChange: () => void
+  onDelete?: (item: PackingItem) => Promise<void>
   bagTrackingEnabled?: boolean
   bags?: PackingBag[]
   onCreateBag: (name: string) => Promise<PackingBag | undefined>
   canEdit?: boolean
 }
 
-export function ArtikelZeile({ item, tripId, categories, onCategoryChange, bagTrackingEnabled, bags = [], onCreateBag, canEdit = true }: ArtikelZeileProps) {
+export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDelete, bagTrackingEnabled, bags = [], onCreateBag, canEdit = true }: ArtikelZeileProps) {
   const isPlaceholder = item.name === PACKING_PLACEHOLDER_NAME
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(isPlaceholder ? '' : item.name)
@@ -43,6 +44,9 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, bagTr
   }
 
   const handleDelete = async () => {
+    // The panel routes deletion through onDelete so an emptied custom category
+    // keeps its placeholder; fall back to a plain delete when used standalone.
+    if (onDelete) { await onDelete(item); return }
     try { await deletePackingItem(tripId, item.id) }
     catch { toast.error(t('packing.toast.deleteError')) }
   }

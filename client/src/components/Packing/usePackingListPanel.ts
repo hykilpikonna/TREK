@@ -8,7 +8,7 @@ import { useTranslation } from '../../i18n'
 import { packingApi, tripsApi } from '../../api/client'
 import { useAddonStore } from '../../store/addonStore'
 import type { PackingItem, PackingBag } from '../../types'
-import { BAG_COLORS } from './packingListPanel.constants'
+import { BAG_COLORS, PACKING_PLACEHOLDER_NAME } from './packingListPanel.constants'
 import { parseImportLines } from './packingListPanel.helpers'
 
 export interface TripMember {
@@ -44,7 +44,7 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
   const [filter, setFilter] = useState('alle') // 'alle' | 'offen' | 'erledigt'
   const [addingCategory, setAddingCategory] = useState(false)
   const [newCatName, setNewCatName] = useState('')
-  const { addPackingItem, updatePackingItem, deletePackingItem } = useTripStore()
+  const { addPackingItem, updatePackingItem, deletePackingItem, togglePackingItem } = useTripStore()
   const can = useCanDo()
   const trip = useTripStore((s) => s.trip)
   const canEdit = can('packing_edit', trip)
@@ -106,8 +106,43 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
 
   const handleAddItemToCategory = async (category: string, name: string) => {
     try {
-      await addPackingItem(tripId, { name, category })
+      // Reuse the '...' placeholder slot when the category already has one, so a
+      // freshly-emptied category keeps its position (and therefore its colour)
+      // instead of the new item being appended to the end of the list.
+      const placeholder = useTripStore.getState().packingItems.find(
+        i => i.category === category && i.name === PACKING_PLACEHOLDER_NAME
+      )
+      if (placeholder) {
+        await updatePackingItem(tripId, placeholder.id, { name })
+      } else {
+        await addPackingItem(tripId, { name, category })
+      }
     } catch { toast.error(t('packing.toast.addError')) }
+  }
+
+  // Deleting an item from a row. When it is the last item of a user-created
+  // category, turn that row back into the '...' placeholder in place rather than
+  // deleting it (#1289). Updating the row keeps its id, list position and colour,
+  // so the category neither disappears nor jumps to the end. The default
+  // (uncategorized) group and the placeholder row itself are deleted normally —
+  // removing the placeholder is how an empty category is dismissed.
+  const handleDeleteItem = async (item: PackingItem) => {
+    const category = item.category
+    const isLastInCategory = !!category
+      && item.name !== PACKING_PLACEHOLDER_NAME
+      && !items.some(i => i.id !== item.id && i.category === category)
+    try {
+      if (isLastInCategory) {
+        if (item.checked) await togglePackingItem(tripId, item.id, false)
+        await updatePackingItem(tripId, item.id, {
+          name: PACKING_PLACEHOLDER_NAME, weight_grams: null, bag_id: null, quantity: 1,
+        })
+      } else {
+        await deletePackingItem(tripId, item.id)
+      }
+    } catch {
+      toast.error(t('packing.toast.deleteError'))
+    }
   }
 
   const handleAddNewCategory = async () => {
@@ -308,7 +343,7 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
     tripId, items, inlineHeader, t, canEdit, isAdmin, font,
     filter, setFilter, addingCategory, setAddingCategory, newCatName, setNewCatName,
     tripMembers, categoryAssignees, handleSetAssignees, allCategories, gruppiert, abgehakt, fortschritt,
-    handleAddItemToCategory, handleAddNewCategory, handleRenameCategory, handleDeleteCategory, handleClearChecked,
+    handleAddItemToCategory, handleAddNewCategory, handleRenameCategory, handleDeleteCategory, handleDeleteItem, handleClearChecked,
     bagTrackingEnabled, bags, newBagName, setNewBagName, showAddBag, setShowAddBag, showBagModal, setShowBagModal,
     handleCreateBag, handleCreateBagByName, handleDeleteBag, handleUpdateBag, handleSetBagMembers,
     availableTemplates, showTemplateDropdown, setShowTemplateDropdown, applyingTemplate,

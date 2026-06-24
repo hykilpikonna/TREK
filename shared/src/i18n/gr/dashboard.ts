@@ -41,6 +41,9 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Παρελθόν',
   'dashboard.status.daysLeft': '{count} μέρες έμειναν',
   'dashboard.toast.loadError': 'Αποτυχία φόρτωσης ταξιδιών',
+  'dashboard.loadErrorBanner':
+    'Δεν ήταν δυνατή η σύνδεση με τον διακομιστή. Τα ταξίδια σας είναι ασφαλή — δοκιμάστε ξανά.',
+  'dashboard.retry': 'Δοκιμάστε ξανά',
   'dashboard.toast.created': 'Ταξίδι δημιουργήθηκε επιτυχώς!',
   'dashboard.toast.createError': 'Αποτυχία δημιουργίας ταξιδιού',
   'dashboard.toast.updated': 'Ταξίδι ενημερώθηκε!',

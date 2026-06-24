@@ -323,6 +323,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Πώς να Ενημερώσετε',
   'admin.update.dockerText':
     'Η εγκατάστασή σας TREK εκτελείται σε Docker. Για να ενημερωθείτε στο {version}, εκτελέστε τις ακόλουθες εντολές στον server σας:',
+  'admin.update.nonDockerText':
+    'Αυτή η εγκατάσταση TREK δεν εκτελείται σε Docker. Για να ενημερωθείτε στο {version}, εκτελέστε ξανά τη μέθοδο εγκατάστασης ή ενημέρωσης που χρησιμοποιήσατε — για παράδειγμα, στα Proxmox Community Scripts εκτελέστε την ενημέρωση από την κονσόλα LXC:',
+  'admin.update.wikiLink': 'Άνοιγμα του οδηγού ενημέρωσης',
   'admin.update.reloadHint': 'Παρακαλώ ανανεώστε τη σελίδα σε λίγα δευτερόλεπτα.',
   'admin.tabs.permissions': 'Δικαιώματα',
   'admin.addons.catalog.journey.name': 'Ταξίδι',

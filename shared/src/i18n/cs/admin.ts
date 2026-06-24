@@ -268,6 +268,9 @@ const admin: TranslationStrings = {
   'admin.update.howTo': 'Jak aktualizovat',
   'admin.update.dockerText':
     'Váš TREK běží v Dockeru. Pro aktualizaci na verzi {version} spusťte na svém serveru tyto příkazy:',
+  'admin.update.nonDockerText':
+    'Tato instance TREK neběží v Dockeru. Pro aktualizaci na verzi {version} znovu spusťte instalační nebo aktualizační metodu, kterou jste použili — například u Proxmox Community Scripts spusťte aktualizaci z konzole LXC:',
+  'admin.update.wikiLink': 'Otevřít průvodce aktualizací',
   'admin.update.reloadHint': 'Prosím obnovte stránku za několik sekund.',
   'admin.tabs.permissions': 'Oprávnění',
   'admin.notifications.emailPanel.title': 'Email (SMTP)',

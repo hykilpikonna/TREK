@@ -42,6 +42,8 @@ const dashboard: TranslationStrings = {
   'dashboard.status.past': 'Proběhlé',
   'dashboard.status.daysLeft': 'zbývá {count} dní',
   'dashboard.toast.loadError': 'Nepodařilo se načíst cesty',
+  'dashboard.loadErrorBanner': 'Server nebyl dostupný. Vaše cesty jsou v bezpečí — zkuste to prosím znovu.',
+  'dashboard.retry': 'Zkusit znovu',
   'dashboard.toast.created': 'Cesta byla úspěšně vytvořena!',
   'dashboard.toast.createError': 'Nepodařilo se vytvořit cestu',
   'dashboard.toast.updated': 'Cesta byla aktualizována!',

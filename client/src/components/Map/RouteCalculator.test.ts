@@ -6,6 +6,7 @@ import {
   calculateSegments,
   optimizeRoute,
   generateGoogleMapsUrl,
+  withHotelBookends,
 } from './RouteCalculator'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
@@ -239,5 +240,48 @@ describe('generateGoogleMapsUrl', () => {
     expect(result).toMatch(/^https:\/\/www\.google\.com\/maps\/dir\//)
     expect(result).toContain('48.85,2.35')
     expect(result).toContain('48.86,2.36')
+  })
+})
+
+// ── withHotelBookends (#1275: draw the hotel → first / last → hotel legs) ────────
+
+describe('withHotelBookends', () => {
+  const hotel = { lat: 1, lng: 1 }
+  const a = { lat: 2, lng: 2 }
+  const b = { lat: 3, lng: 3 }
+  const evening = { lat: 4, lng: 4 }
+
+  it('FE-COMP-ROUTECALCULATOR-021: leaves runs untouched when there is no hotel', () => {
+    const runs = [[a, b]]
+    expect(withHotelBookends(runs, a, b, null, null)).toEqual([[a, b]])
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-022: prepends hotel→first and appends last→hotel around the runs', () => {
+    const runs = [[a, b]]
+    expect(withHotelBookends(runs, a, b, hotel, evening)).toEqual([
+      [hotel, a],
+      [a, b],
+      [b, evening],
+    ])
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-023: a single stop with no runs still draws hotel→stop→hotel', () => {
+    expect(withHotelBookends([], a, a, hotel, evening)).toEqual([
+      [hotel, a],
+      [a, evening],
+    ])
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-024: a missing first/last waypoint skips that bookend', () => {
+    const runs = [[a, b]]
+    expect(withHotelBookends(runs, undefined, undefined, hotel, evening)).toEqual([[a, b]])
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-025: only the start hotel adds just the opening leg', () => {
+    const runs = [[a, b]]
+    expect(withHotelBookends(runs, a, b, hotel, null)).toEqual([
+      [hotel, a],
+      [a, b],
+    ])
   })
 })
