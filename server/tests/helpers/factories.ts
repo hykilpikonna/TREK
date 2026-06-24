@@ -80,18 +80,47 @@ export interface TestTrip {
   title: string;
   start_date: string | null;
   end_date: string | null;
+  schedule_margin_minutes?: number;
+  routing_provider?: 'osrm' | 'google_maps' | 'google_maps_mobile';
+  routing_optimism?: number;
+  routing_avoid_tolls?: number;
+  routing_avoid_highways?: number;
+  routing_avoid_ferries?: number;
 }
 
 export function createTrip(
   db: Database.Database,
   userId: number,
-  overrides: Partial<{ title: string; start_date: string; end_date: string; description: string }> = {}
+  overrides: Partial<{
+    title: string;
+    start_date: string;
+    end_date: string;
+    description: string;
+    schedule_margin_minutes: number;
+    routing_provider: 'osrm' | 'google_maps' | 'google_maps_mobile';
+    routing_optimism: number;
+    routing_avoid_tolls: boolean | number;
+    routing_avoid_highways: boolean | number;
+    routing_avoid_ferries: boolean | number;
+  }> = {}
 ): TestTrip {
   _tripSeq++;
   const title = overrides.title ?? `Test Trip ${_tripSeq}`;
   const result = db.prepare(
-    'INSERT INTO trips (user_id, title, description, start_date, end_date) VALUES (?, ?, ?, ?, ?)'
-  ).run(userId, title, overrides.description ?? null, overrides.start_date ?? null, overrides.end_date ?? null);
+    'INSERT INTO trips (user_id, title, description, start_date, end_date, schedule_margin_minutes, routing_provider, routing_optimism, routing_avoid_tolls, routing_avoid_highways, routing_avoid_ferries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    userId,
+    title,
+    overrides.description ?? null,
+    overrides.start_date ?? null,
+    overrides.end_date ?? null,
+    overrides.schedule_margin_minutes ?? 0,
+    overrides.routing_provider ?? 'osrm',
+    overrides.routing_optimism ?? 0.33,
+    overrides.routing_avoid_tolls ? 1 : 0,
+    overrides.routing_avoid_highways ? 1 : 0,
+    overrides.routing_avoid_ferries ? 1 : 0,
+  );
 
   // Auto-generate days if dates are provided
   if (overrides.start_date && overrides.end_date) {

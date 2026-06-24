@@ -356,4 +356,38 @@ describe('MapsController (parity with the legacy /api/maps route)', () => {
       expect(reverse).toHaveBeenCalledWith('1', '2', 'fr');
     });
   });
+
+  describe('POST /directions-preview', () => {
+    it('returns the preview directions service result', async () => {
+      const result = { source: 'google-preview-directions', routes: [] };
+      const previewDirections = vi.fn().mockResolvedValue(result);
+      const body = { origin: { lat: 1, lng: 2 }, destination: { lat: 3, lng: 4 } };
+      await expect(makeController({ previewDirections }).directionsPreview(body)).resolves.toBe(result);
+      expect(previewDirections).toHaveBeenCalledWith(body);
+    });
+
+    it('maps service errors', async () => {
+      const previewDirections = vi.fn().mockRejectedValue(withError(502, 'Google failed'));
+      expect(await thrown(() => makeController({ previewDirections }).directionsPreview({}))).toEqual({
+        status: 502, body: { error: 'Google failed' },
+      });
+    });
+  });
+
+  describe('POST /directions-mobile', () => {
+    it('returns the mobile directions service result', async () => {
+      const result = { source: 'google-mobile-mmap', routes: [] };
+      const mobileDirections = vi.fn().mockResolvedValue(result);
+      const body = { from: 'Tokyo Station', to: 'Fushimi Station Nagoya' };
+      await expect(makeController({ mobileDirections }).directionsMobile(body)).resolves.toBe(result);
+      expect(mobileDirections).toHaveBeenCalledWith(body);
+    });
+
+    it('maps service errors', async () => {
+      const mobileDirections = vi.fn().mockRejectedValue(withError(502, 'Google failed'));
+      expect(await thrown(() => makeController({ mobileDirections }).directionsMobile({}))).toEqual({
+        status: 502, body: { error: 'Google failed' },
+      });
+    });
+  });
 });

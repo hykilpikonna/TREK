@@ -13,6 +13,9 @@ import { z } from 'zod';
  * permission checks + audit logging. Trip rows are wide, so responses stay open.
  */
 
+const sqliteBoolean = z.union([z.boolean(), z.number().int().min(0).max(1)]);
+const routingProviderSchema = z.enum(['osrm', 'google_maps', 'google_maps_mobile']);
+
 /**
  * Trip entity as returned by the trip list / get / create / update endpoints
  * (server/src/services/tripService.ts -> TRIP_SELECT). Columns of the `trips`
@@ -30,6 +33,12 @@ export const tripSchema = z.object({
   cover_image: z.string().nullable().optional(),
   is_archived: z.number(),
   reminder_days: z.number(),
+  schedule_margin_minutes: z.number().optional(),
+  routing_provider: routingProviderSchema.optional(),
+  routing_optimism: z.number().min(0).max(1).optional(),
+  routing_avoid_tolls: sqliteBoolean.optional(),
+  routing_avoid_highways: sqliteBoolean.optional(),
+  routing_avoid_ferries: sqliteBoolean.optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
   // computed in TRIP_SELECT (list/get)
@@ -65,6 +74,12 @@ export const tripCreateRequestSchema = z.object({
   end_date: z.string().nullable().optional(),
   currency: z.string().optional(),
   reminder_days: z.number().optional(),
+  schedule_margin_minutes: z.number().int().min(0).optional(),
+  routing_provider: routingProviderSchema.optional(),
+  routing_optimism: z.number().min(0).max(1).optional(),
+  routing_avoid_tolls: z.boolean().optional(),
+  routing_avoid_highways: z.boolean().optional(),
+  routing_avoid_ferries: z.boolean().optional(),
   day_count: z.number().optional(),
 });
 export type TripCreateRequest = z.infer<typeof tripCreateRequestSchema>;
@@ -77,6 +92,12 @@ export const tripUpdateRequestSchema = z.object({
   end_date: z.string().nullable().optional(),
   currency: z.string().optional(),
   reminder_days: z.number().optional(),
+  schedule_margin_minutes: z.number().int().min(0).optional(),
+  routing_provider: routingProviderSchema.optional(),
+  routing_optimism: z.number().min(0).max(1).optional(),
+  routing_avoid_tolls: z.boolean().optional(),
+  routing_avoid_highways: z.boolean().optional(),
+  routing_avoid_ferries: z.boolean().optional(),
   day_count: z.number().optional(),
   is_archived: z.union([z.boolean(), z.number()]).optional(),
   cover_image: z.string().nullable().optional(),

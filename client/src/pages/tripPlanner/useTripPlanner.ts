@@ -17,8 +17,42 @@ import { useRouteCalculation } from '../../hooks/useRouteCalculation'
 import { usePlaceSelection } from '../../hooks/usePlaceSelection'
 import { usePlannerHistory } from '../../hooks/usePlannerHistory'
 import { useAirtrailConnection } from '../../hooks/useAirtrailConnection'
+import { parseDurationMinutes } from '../../utils/durationInput'
 import type { Accommodation, TripMember, Day, Place, Reservation } from '../../types'
 import { resolvePoolAssignmentId } from './tripPlannerModel'
+import type { RoutingProvider } from '../../components/Map/RouteCalculator'
+
+function readRouteShownPreference(tripId: number): boolean {
+  if (typeof window === 'undefined' || !Number.isFinite(tripId)) return false
+  try {
+    return window.localStorage.getItem(`trek:route-shown:${tripId}`) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function readRouteProfilePreference(tripId: number): 'driving' | 'walking' {
+  if (typeof window === 'undefined' || !Number.isFinite(tripId)) return 'driving'
+  try {
+    return window.localStorage.getItem(`trek:route-profile:${tripId}`) === 'walking' ? 'walking' : 'driving'
+  } catch {
+    return 'driving'
+  }
+}
+
+function normalizeRoutingProvider(value: unknown): RoutingProvider {
+  if (value === 'google_maps' || value === 'google_maps_mobile') return value
+  return 'osrm'
+}
+
+function normalizeRoutingOptimism(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.33
+}
+
+function normalizeRoutingAvoidFlag(value: unknown): boolean {
+  return value === true || value === 1
+}
 
 /**
  * Trip planner page logic — the big one. Owns the trip store wiring, addon
@@ -159,9 +193,9 @@ export function useTripPlanner() {
   const [editingTransport, setEditingTransport] = useState<Reservation | null>(null)
   const [transportModalDayId, setTransportModalDayId] = useState<number | null>(null)
   // Manual route planning: off by default, toggled from the day-plan footer. Mode
-  // (driving/walking) is per-session and selects which travel time the connectors show.
-  const [routeShown, setRouteShown] = useState(false)
-  const [routeProfile, setRouteProfile] = useState<'driving' | 'walking'>('driving')
+  // (driving/walking) is trip-scoped and selects which travel time the connectors show.
+  const [routeShown, setRouteShown] = useState(() => readRouteShownPreference(tripId))
+  const [routeProfile, setRouteProfile] = useState<'driving' | 'walking'>(() => readRouteProfilePreference(tripId))
   const [fitKey, setFitKey] = useState<number>(0)
   const initialFitTripId = useRef<number | null>(null)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState<'left' | 'right' | null>(null)
@@ -199,6 +233,14 @@ export function useTripPlanner() {
     setVisibleConnections(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }, [])
   const [mapTransportDetail, setMapTransportDetail] = useState<Reservation | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !Number.isFinite(tripId)) return
+    try {
+      window.localStorage.setItem(`trek:route-shown:${tripId}`, String(routeShown))
+      window.localStorage.setItem(`trek:route-profile:${tripId}`, routeProfile)
+    } catch {}
+  }, [tripId, routeShown, routeProfile])
 
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
   useEffect(() => {
@@ -289,7 +331,25 @@ export function useTripPlanner() {
     })
   }, [places, mapCategoryFilter, mapPlacesFilter, assignments, expandedDayIds])
 
-  const { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation({ assignments } as any, selectedDayId, routeShown, routeProfile, tripAccommodations)
+  const routeProvider = normalizeRoutingProvider(trip?.routing_provider)
+  const routeOptimism = normalizeRoutingOptimism(trip?.routing_optimism)
+  const routeAvoidTolls = normalizeRoutingAvoidFlag(trip?.routing_avoid_tolls)
+  const routeAvoidHighways = normalizeRoutingAvoidFlag(trip?.routing_avoid_highways)
+  const routeAvoidFerries = normalizeRoutingAvoidFlag(trip?.routing_avoid_ferries)
+  const scheduleMarginMinutes = Number.isFinite(Number(trip?.schedule_margin_minutes))
+    ? Math.max(0, Math.round(Number(trip?.schedule_margin_minutes)))
+    : 0
+  const { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay } = useRouteCalculation(
+    { assignments } as any,
+    selectedDayId,
+    routeShown,
+    routeProfile,
+    tripAccommodations,
+    routeProvider,
+    routeOptimism,
+    scheduleMarginMinutes,
+    { avoidTolls: routeAvoidTolls, avoidHighways: routeAvoidHighways, avoidFerries: routeAvoidFerries },
+  )
 
   const handleSelectDay = useCallback((dayId: number | null, skipFit?: boolean) => {
     const changed = dayId !== selectedDayId
@@ -386,12 +446,18 @@ export function useTripPlanner() {
     const pendingFiles = data._pendingFiles
     delete data._pendingFiles
     if (editingPlace) {
-      // Always strip time fields from place update — time is per-assignment only
-      const { place_time, end_time, ...placeData } = data
+      // Activity duration is per-assignment; start/end timestamps are calculated.
+      const { duration_minutes, ...placeData } = data
+      const parsedDuration = editingAssignmentId ? parseDurationMinutes(duration_minutes) : null
+      if (editingAssignmentId && parsedDuration == null) {
+        throw new Error(t('places.durationInvalid'))
+      }
       await tripActions.updatePlace(tripId, editingPlace.id, placeData)
-      // If editing from assignment context, save time per-assignment
+      // If editing from assignment context, save duration per-assignment.
       if (editingAssignmentId) {
-        await assignmentsApi.updateTime(tripId, editingAssignmentId, { place_time: place_time || null, end_time: end_time || null })
+        await assignmentsApi.updateTime(tripId, editingAssignmentId, {
+          duration_minutes: parsedDuration,
+        })
         await tripActions.refreshDays(tripId)
       }
       // Upload pending files with place_id
@@ -405,7 +471,11 @@ export function useTripPlanner() {
       }
       toast.success(t('trip.toast.placeUpdated'))
     } else {
-      const place = await tripActions.addPlace(tripId, data)
+      const duration = parseDurationMinutes(data.duration_minutes)
+      const place = await tripActions.addPlace(tripId, {
+        ...data,
+        duration_minutes: duration ?? 60,
+      })
       if (pendingFiles?.length > 0 && place?.id) {
         for (const file of pendingFiles) {
           const fd = new FormData()
@@ -422,7 +492,19 @@ export function useTripPlanner() {
         })
       }
     }
-  }, [editingPlace, editingAssignmentId, tripId, toast, pushUndo])
+  }, [editingPlace, editingAssignmentId, tripId, toast, pushUndo, t])
+
+  const handleUpdateAssignmentDuration = useCallback(async (
+    assignmentId: number,
+    dayId: number,
+    durationMinutes: number,
+  ) => {
+    await assignmentsApi.updateTime(tripId, assignmentId, {
+      duration_minutes: durationMinutes,
+    })
+    await tripActions.refreshDays(tripId)
+    updateRouteForDay(dayId)
+  }, [tripId, updateRouteForDay])
 
   // Open the place editor from any entry point (Places pool, inspector, map).
   // Times live per day-assignment, so when no day is in context resolve the
@@ -702,7 +784,7 @@ export function useTripPlanner() {
     route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay,
     handleSelectDay, handlePlaceClick, handleMarkerClick, handleMapClick, handleMapContextMenu, openAddPlaceFromPoi,
     handleSavePlace, openPlaceEditor, handleDeletePlace, confirmDeletePlace, confirmDeletePlaces,
-    handleAssignToDay, handleRemoveAssignment, handleReorder, handleReorderDays, handleAddDay, handleUpdateDayTitle,
+    handleAssignToDay, handleRemoveAssignment, handleUpdateAssignmentDuration, handleReorder, handleReorderDays, handleAddDay, handleUpdateDayTitle,
     handleSaveReservation, handleSaveTransport, handleDeleteReservation,
     selectedPlace, dayOrderMap, dayPlaces,
     mapTileUrl, defaultCenter, defaultZoom, fontStyle, splashDone,

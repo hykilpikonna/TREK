@@ -3054,6 +3054,71 @@ function runMigrations(db: Database.Database): void {
         if (!err.message?.includes('duplicate column name')) throw err;
       }
     },
+    () => {
+      try {
+        db.exec("ALTER TABLE days ADD COLUMN wake_up_time TEXT DEFAULT '08:00'");
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+      try {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN duration_minutes INTEGER DEFAULT 60');
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+      try {
+        db.exec(`
+          UPDATE day_assignments
+          SET duration_minutes = COALESCE(
+            (SELECT duration_minutes FROM places WHERE places.id = day_assignments.place_id),
+            duration_minutes,
+            60
+          )
+          WHERE duration_minutes IS NULL OR duration_minutes = 60
+        `);
+      } catch (err: any) {
+        console.warn('[migrations] Non-fatal migration step failed:', err);
+      }
+    },
+    () => {
+      try {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN margin_before_minutes INTEGER DEFAULT 0');
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+      try {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN margin_after_minutes INTEGER DEFAULT 0');
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+    },
+    () => {
+      try {
+        db.exec('ALTER TABLE trips ADD COLUMN schedule_margin_minutes INTEGER DEFAULT 0');
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+    },
+    () => {
+      try {
+        db.exec("ALTER TABLE trips ADD COLUMN routing_provider TEXT DEFAULT 'osrm'");
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+      try {
+        db.exec('ALTER TABLE trips ADD COLUMN routing_optimism REAL DEFAULT 0.33');
+      } catch (err: any) {
+        if (!err.message?.includes('duplicate column name')) throw err;
+      }
+    },
+    () => {
+      for (const column of ['routing_avoid_tolls', 'routing_avoid_highways', 'routing_avoid_ferries']) {
+        try {
+          db.exec(`ALTER TABLE trips ADD COLUMN ${column} INTEGER DEFAULT 0`);
+        } catch (err: any) {
+          if (!err.message?.includes('duplicate column name')) throw err;
+        }
+      }
+    },
     // Store Google Maps feature IDs separately from real Google Places API IDs.
     () => {
       try {
@@ -3082,6 +3147,87 @@ function runMigrations(db: Database.Database): void {
     }
     console.log(`[DB] Migrations complete — schema version ${migrations.length}`);
   }
+
+  ensureDayTimeColumns(db);
+}
+
+type RepairTable = 'trips' | 'days' | 'day_assignments' | 'places';
+
+function tableExists(db: Database.Database, table: RepairTable): boolean {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+
+function columnExists(db: Database.Database, table: RepairTable, column: string): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column));
+}
+
+function ensureDayTimeColumns(db: Database.Database): void {
+  db.transaction(() => {
+    let addedDurationColumn = false;
+    const hasDaysTable = tableExists(db, 'days');
+    const hasTripsTable = tableExists(db, 'trips');
+    const hasDayAssignmentsTable = tableExists(db, 'day_assignments');
+    const hasPlacesTable = tableExists(db, 'places');
+
+    if (hasDaysTable && !columnExists(db, 'days', 'wake_up_time')) {
+      db.exec("ALTER TABLE days ADD COLUMN wake_up_time TEXT DEFAULT '08:00'");
+      console.log('[DB] Repaired missing days.wake_up_time column');
+    }
+
+    if (hasTripsTable) {
+      if (!columnExists(db, 'trips', 'schedule_margin_minutes')) {
+        db.exec('ALTER TABLE trips ADD COLUMN schedule_margin_minutes INTEGER DEFAULT 0');
+        console.log('[DB] Repaired missing trips.schedule_margin_minutes column');
+      }
+
+      if (!columnExists(db, 'trips', 'routing_provider')) {
+        db.exec("ALTER TABLE trips ADD COLUMN routing_provider TEXT DEFAULT 'osrm'");
+        console.log('[DB] Repaired missing trips.routing_provider column');
+      }
+
+      if (!columnExists(db, 'trips', 'routing_optimism')) {
+        db.exec('ALTER TABLE trips ADD COLUMN routing_optimism REAL DEFAULT 0.33');
+        console.log('[DB] Repaired missing trips.routing_optimism column');
+      }
+
+      for (const column of ['routing_avoid_tolls', 'routing_avoid_highways', 'routing_avoid_ferries']) {
+        if (!columnExists(db, 'trips', column)) {
+          db.exec(`ALTER TABLE trips ADD COLUMN ${column} INTEGER DEFAULT 0`);
+          console.log(`[DB] Repaired missing trips.${column} column`);
+        }
+      }
+    }
+
+    if (hasDayAssignmentsTable) {
+      if (!columnExists(db, 'day_assignments', 'duration_minutes')) {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN duration_minutes INTEGER DEFAULT 60');
+        addedDurationColumn = true;
+        console.log('[DB] Repaired missing day_assignments.duration_minutes column');
+      }
+
+      if (!columnExists(db, 'day_assignments', 'margin_before_minutes')) {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN margin_before_minutes INTEGER DEFAULT 0');
+        console.log('[DB] Repaired missing day_assignments.margin_before_minutes column');
+      }
+
+      if (!columnExists(db, 'day_assignments', 'margin_after_minutes')) {
+        db.exec('ALTER TABLE day_assignments ADD COLUMN margin_after_minutes INTEGER DEFAULT 0');
+        console.log('[DB] Repaired missing day_assignments.margin_after_minutes column');
+      }
+
+      if (addedDurationColumn && hasPlacesTable) {
+        db.exec(`
+          UPDATE day_assignments
+          SET duration_minutes = COALESCE(
+            (SELECT duration_minutes FROM places WHERE places.id = day_assignments.place_id),
+            duration_minutes,
+            60
+          )
+          WHERE duration_minutes IS NULL OR duration_minutes = 60
+        `);
+      }
+    }
+  })();
 }
 
 export { runMigrations };

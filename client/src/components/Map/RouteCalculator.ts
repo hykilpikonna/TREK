@@ -1,4 +1,5 @@
 import type { RouteResult, RouteSegment, RouteWithLegs, Waypoint, RouteAnchors } from '../../types'
+import { apiClient } from '../../api/client'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
 
@@ -15,6 +16,139 @@ const OSRM_PROFILE_BASE: Record<'driving' | 'walking' | 'cycling', string> = {
 // this avoids re-hitting the public OSRM demo server on every day switch / reorder.
 const routeCache = new Map<string, RouteWithLegs>()
 const ROUTE_CACHE_MAX = 200
+const ROUTE_CACHE_STORAGE_KEY = 'trek:route-cache:v1'
+const ROUTE_CACHE_VERSION = 3
+const ROUTE_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+export type RoutingProvider = 'osrm' | 'google_maps' | 'google_maps_mobile'
+
+export interface GoogleRoutingOptions {
+  avoidTolls?: boolean
+  avoidHighways?: boolean
+  avoidFerries?: boolean
+}
+
+interface GoogleDirectionsDuration {
+  seconds: number | null
+  text: string | null
+}
+
+interface GoogleDirectionsRoute {
+  distance?: { meters: number | null; text: string | null }
+  duration?: GoogleDirectionsDuration
+  traffic?: {
+    duration?: GoogleDirectionsDuration | null
+    range?: { minSeconds: number | null; maxSeconds: number | null; text: string | null } | null
+  } | null
+  overviewGeometry?: Array<{ lat: number; lng: number }>
+}
+
+interface GoogleDirectionsResponse {
+  routes?: GoogleDirectionsRoute[]
+}
+
+interface GoogleMobileDirectionsDuration {
+  seconds: number | null
+  text: string | null
+}
+
+interface GoogleMobileDirectionsMoney {
+  amount: number | null
+  text: string | null
+  currency: string | null
+  label: string | null
+}
+
+interface GoogleMobileDirectionsRoute {
+  distance?: { meters: number | null; text: string | null }
+  duration?: GoogleMobileDirectionsDuration
+  trafficPrediction?: {
+    optimistic?: GoogleMobileDirectionsDuration | null
+    pessimistic?: GoogleMobileDirectionsDuration | null
+    text?: string | null
+  } | null
+  tollFee?: GoogleMobileDirectionsMoney | null
+  overviewGeometry?: Array<{ lat: number; lng: number }>
+}
+
+interface GoogleMobileDirectionsResponse {
+  routes?: GoogleMobileDirectionsRoute[]
+  optimisticDuration?: GoogleMobileDirectionsDuration | null
+  pessimisticDuration?: GoogleMobileDirectionsDuration | null
+}
+
+interface StoredRouteCacheEntry {
+  key: string
+  savedAt: number
+  route: RouteWithLegs
+}
+
+interface StoredRouteCache {
+  version: number
+  entries: StoredRouteCacheEntry[]
+}
+
+function getStorage(): Storage | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
+function readStoredRouteCache(): StoredRouteCacheEntry[] {
+  const storage = getStorage()
+  if (!storage) return []
+  try {
+    const raw = storage.getItem(ROUTE_CACHE_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as StoredRouteCache
+    if (parsed?.version !== ROUTE_CACHE_VERSION || !Array.isArray(parsed.entries)) return []
+    const cutoff = Date.now() - ROUTE_CACHE_MAX_AGE_MS
+    return parsed.entries
+      .filter(entry => entry && typeof entry.key === 'string' && entry.savedAt >= cutoff && entry.route)
+      .slice(-ROUTE_CACHE_MAX)
+  } catch {
+    return []
+  }
+}
+
+function writeStoredRouteCache(entries: StoredRouteCacheEntry[]): void {
+  const storage = getStorage()
+  if (!storage) return
+  try {
+    storage.setItem(ROUTE_CACHE_STORAGE_KEY, JSON.stringify({
+      version: ROUTE_CACHE_VERSION,
+      entries: entries.slice(-ROUTE_CACHE_MAX),
+    }))
+  } catch {
+    // Storage can be unavailable or full; the in-memory cache still works.
+  }
+}
+
+function getPersistedRoute(cacheKey: string): RouteWithLegs | null {
+  const entries = readStoredRouteCache()
+  const entry = entries.find(e => e.key === cacheKey)
+  if (!entry) return null
+  routeCache.set(cacheKey, entry.route)
+  return entry.route
+}
+
+function setCachedRoute(cacheKey: string, route: RouteWithLegs): void {
+  routeCache.set(cacheKey, route)
+  if (routeCache.size > ROUTE_CACHE_MAX) {
+    const oldest = routeCache.keys().next().value
+    if (oldest !== undefined) routeCache.delete(oldest)
+  }
+
+  const entries = readStoredRouteCache().filter(e => e.key !== cacheKey)
+  entries.push({ key: cacheKey, savedAt: Date.now(), route })
+  writeStoredRouteCache(entries)
+}
+
+export function __clearRouteCacheForTests(): void {
+  routeCache.clear()
+}
 
 /** Fetches a full route via OSRM and returns coordinates, distance, and duration estimates for driving/walking. */
 export async function calculateRoute(
@@ -231,16 +365,61 @@ export async function calculateSegments(
  */
 export async function calculateRouteWithLegs(
   waypoints: Waypoint[],
-  { signal, profile = 'driving' }: { signal?: AbortSignal; profile?: 'driving' | 'walking' | 'cycling' } = {}
+  {
+    signal,
+    profile = 'driving',
+    provider = 'osrm',
+    optimism = 0.33,
+    departureLocalDateTime,
+    google = {},
+  }: {
+    signal?: AbortSignal
+    profile?: 'driving' | 'walking' | 'cycling'
+    provider?: RoutingProvider
+    optimism?: number
+    departureLocalDateTime?: string | null
+    google?: GoogleRoutingOptions
+  } = {}
 ): Promise<RouteWithLegs> {
   if (!waypoints || waypoints.length < 2) {
     return { coordinates: [], distance: 0, duration: 0, legs: [] }
   }
 
   const coords = waypoints.map((p) => `${p.lng},${p.lat}`).join(';')
-  const cacheKey = `${profile}:${coords}`
+  const boundedOptimism = normalizeOptimism(optimism)
+  const googleOptionsKey = googleOptionsCacheKey(google)
+  const cacheKey = provider === 'google_maps'
+    ? `${provider}:${profile}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
+    : provider === 'google_maps_mobile'
+      ? `${provider}:${profile}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
+      : `${provider}:${profile}:${coords}`
   const cached = routeCache.get(cacheKey)
   if (cached) return cached
+  const persisted = getPersistedRoute(cacheKey)
+  if (persisted) return persisted
+
+  if (provider === 'google_maps') {
+    const result = await calculateGoogleRouteWithLegs(waypoints, {
+      signal,
+      profile,
+      optimism: boundedOptimism,
+      departureLocalDateTime,
+      google,
+    })
+    setCachedRoute(cacheKey, result)
+    return result
+  }
+
+  if (provider === 'google_maps_mobile') {
+    const result = await calculateGoogleMobileRouteWithLegs(waypoints, {
+      signal,
+      optimism: boundedOptimism,
+      departureLocalDateTime,
+      google,
+    })
+    setCachedRoute(cacheKey, result)
+    return result
+  }
 
   const url = `${OSRM_PROFILE_BASE[profile]}/${coords}?overview=full&geometries=geojson&annotations=distance,duration`
   const response = await fetch(url, { signal })
@@ -272,12 +451,231 @@ export async function calculateRouteWithLegs(
   )
 
   const result: RouteWithLegs = { coordinates, distance: route.distance, duration: route.duration, legs }
-  routeCache.set(cacheKey, result)
-  if (routeCache.size > ROUTE_CACHE_MAX) {
-    const oldest = routeCache.keys().next().value
-    if (oldest !== undefined) routeCache.delete(oldest)
-  }
+  setCachedRoute(cacheKey, result)
   return result
+}
+
+function normalizeOptimism(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.33
+}
+
+function googleOptionsCacheKey(options: GoogleRoutingOptions = {}): string {
+  return [
+    options.avoidTolls ? 'tolls' : 'no-tolls',
+    options.avoidHighways ? 'highways' : 'no-highways',
+    options.avoidFerries ? 'ferries' : 'no-ferries',
+  ].join(',')
+}
+
+function googleMode(profile: 'driving' | 'walking' | 'cycling'): 'driving' | 'walking' | 'bicycling' {
+  return profile === 'cycling' ? 'bicycling' : profile
+}
+
+function formatGoogleMobileTollText(tollFee?: GoogleMobileDirectionsMoney | null): string | undefined {
+  const text = tollFee?.text?.trim()
+  if (!text) return undefined
+  const label = tollFee?.label?.trim()
+  if (!label) return text
+  return text.toLowerCase().includes(label.toLowerCase()) ? text : `${label} ${text}`
+}
+
+function addSecondsToLocalDateTime(localDateTime: string, seconds: number): string {
+  const match = localDateTime.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!match) return localDateTime
+  const [, y, mo, d, h, mi, s = '0'] = match
+  const date = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)))
+  date.setUTCSeconds(date.getUTCSeconds() + Math.max(0, Math.round(seconds)))
+  return date.toISOString().slice(0, 16)
+}
+
+function pickGoogleDurationSeconds(route: GoogleDirectionsRoute, optimism: number): number {
+  const min = route.traffic?.range?.minSeconds
+  const max = route.traffic?.range?.maxSeconds
+  if (Number.isFinite(min) && Number.isFinite(max)) {
+    const best = Number(min)
+    const worst = Number(max)
+    return Math.max(0, worst - (worst - best) * optimism)
+  }
+  const trafficDuration = route.traffic?.duration?.seconds
+  if (Number.isFinite(trafficDuration)) return Math.max(0, Number(trafficDuration))
+  const duration = route.duration?.seconds
+  return Number.isFinite(duration) ? Math.max(0, Number(duration)) : 0
+}
+
+function pickGoogleMobileDurationSeconds(
+  response: GoogleMobileDirectionsResponse,
+  route: GoogleMobileDirectionsRoute,
+  optimism: number,
+): number {
+  const best = route.trafficPrediction?.optimistic?.seconds ?? response.optimisticDuration?.seconds
+  const worst = route.trafficPrediction?.pessimistic?.seconds ?? response.pessimisticDuration?.seconds
+  if (Number.isFinite(best) && Number.isFinite(worst)) {
+    const optimistic = Number(best)
+    const pessimistic = Number(worst)
+    return Math.max(0, pessimistic - (pessimistic - optimistic) * optimism)
+  }
+  const duration = route.duration?.seconds
+  return Number.isFinite(duration) ? Math.max(0, Number(duration)) : 0
+}
+
+function appendOverviewGeometry(
+  coordinates: [number, number][],
+  geometry: Array<{ lat: number; lng: number }> | undefined,
+  from: Waypoint,
+  to: Waypoint,
+): void {
+  const points = geometry?.map(p => [p.lat, p.lng] as [number, number])
+  if (points?.length) {
+    if (coordinates.length && coordinates[coordinates.length - 1][0] === points[0][0] && coordinates[coordinates.length - 1][1] === points[0][1]) {
+      coordinates.push(...points.slice(1))
+    } else {
+      coordinates.push(...points)
+    }
+    return
+  }
+
+  if (coordinates.length === 0) coordinates.push([from.lat, from.lng])
+  coordinates.push([to.lat, to.lng])
+}
+
+async function calculateGoogleRouteWithLegs(
+  waypoints: Waypoint[],
+  {
+    signal,
+    profile,
+    optimism,
+    departureLocalDateTime,
+    google,
+  }: {
+    signal?: AbortSignal
+    profile: 'driving' | 'walking' | 'cycling'
+    optimism: number
+    departureLocalDateTime?: string | null
+    google?: GoogleRoutingOptions
+  },
+): Promise<RouteWithLegs> {
+  const legs: RouteSegment[] = []
+  const coordinates: [number, number][] = []
+  let distance = 0
+  let duration = 0
+  let currentDeparture = departureLocalDateTime || null
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i]
+    const to = waypoints[i + 1]
+    const body = {
+      origin: { lat: from.lat, lng: from.lng },
+      destination: { lat: to.lat, lng: to.lng },
+      mode: googleMode(profile),
+      includeOverviewGeometry: true,
+      includeSteps: false,
+      avoidTolls: google?.avoidTolls === true,
+      avoidHighways: google?.avoidHighways === true,
+      avoidFerries: google?.avoidFerries === true,
+      ...(currentDeparture ? { time: { kind: 'departAtLocal' as const, localDateTime: currentDeparture } } : {}),
+    }
+    const response = await apiClient.post('/maps/directions-preview', body, { signal }).then(r => r.data as GoogleDirectionsResponse)
+    const route = response.routes?.[0]
+    if (!route) throw new Error('No route found')
+
+    const legDuration = pickGoogleDurationSeconds(route, optimism)
+    const legDistance = Number(route.distance?.meters) || 0
+    appendOverviewGeometry(coordinates, route.overviewGeometry, from, to)
+
+    const mid: [number, number] = [(from.lat + to.lat) / 2, (from.lng + to.lng) / 2]
+    const durationText = formatDuration(legDuration)
+    legs.push({
+      mid,
+      from: [from.lat, from.lng],
+      to: [to.lat, to.lng],
+      distance: legDistance,
+      duration: legDuration,
+      walkingText: durationText,
+      drivingText: durationText,
+      distanceText: route.distance?.text ?? formatDistance(legDistance),
+      durationText,
+    })
+    distance += legDistance
+    duration += legDuration
+    if (currentDeparture) currentDeparture = addSecondsToLocalDateTime(currentDeparture, legDuration)
+  }
+
+  return {
+    coordinates,
+    distance,
+    duration,
+    legs,
+  }
+}
+
+async function calculateGoogleMobileRouteWithLegs(
+  waypoints: Waypoint[],
+  {
+    signal,
+    optimism,
+    departureLocalDateTime,
+    google,
+  }: {
+    signal?: AbortSignal
+    optimism: number
+    departureLocalDateTime?: string | null
+    google?: GoogleRoutingOptions
+  },
+): Promise<RouteWithLegs> {
+  const legs: RouteSegment[] = []
+  const coordinates: [number, number][] = []
+  let distance = 0
+  let duration = 0
+  let currentDeparture = departureLocalDateTime || null
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i]
+    const to = waypoints[i + 1]
+    const body = {
+      from: { lat: from.lat, lng: from.lng },
+      to: { lat: to.lat, lng: to.lng },
+      ...(currentDeparture ? { departureTime: { kind: 'departAtLocal' as const, localDateTime: currentDeparture } } : {}),
+      options: {
+        avoidTolls: google?.avoidTolls === true,
+        avoidHighways: google?.avoidHighways === true,
+        avoidFerries: google?.avoidFerries === true,
+      },
+    }
+    const response = await apiClient.post('/maps/directions-mobile', body, { signal }).then(r => r.data as GoogleMobileDirectionsResponse)
+    const route = response.routes?.[0]
+    if (!route) throw new Error('No route found')
+
+    const legDuration = pickGoogleMobileDurationSeconds(response, route, optimism)
+    const legDistance = Number(route.distance?.meters) || 0
+    const tollText = formatGoogleMobileTollText(route.tollFee)
+    appendOverviewGeometry(coordinates, route.overviewGeometry, from, to)
+
+    const mid: [number, number] = [(from.lat + to.lat) / 2, (from.lng + to.lng) / 2]
+    const durationText = formatDuration(legDuration)
+    legs.push({
+      mid,
+      from: [from.lat, from.lng],
+      to: [to.lat, to.lng],
+      distance: legDistance,
+      duration: legDuration,
+      walkingText: durationText,
+      drivingText: durationText,
+      distanceText: route.distance?.text ?? formatDistance(legDistance),
+      durationText,
+      ...(tollText ? { tollText } : {}),
+    })
+    distance += legDistance
+    duration += legDuration
+    if (currentDeparture) currentDeparture = addSecondsToLocalDateTime(currentDeparture, legDuration)
+  }
+
+  return {
+    coordinates,
+    distance,
+    duration,
+    legs,
+  }
 }
 
 function formatDistance(meters: number): string {

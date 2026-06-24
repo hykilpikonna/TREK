@@ -24,6 +24,8 @@ const dayplan: TranslationStrings = {
   'dayplan.days': 'Tage',
   'dayplan.dayN': 'Tag {n}',
   'dayplan.calculating': 'Berechne...',
+  'dayplan.wake': 'Wake',
+  'dayplan.maxSleep': 'Rest',
   'dayplan.route': 'Route',
   'dayplan.optimize': 'Optimieren',
   'dayplan.optimized': 'Route optimiert',

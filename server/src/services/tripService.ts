@@ -175,18 +175,58 @@ interface CreateTripData {
   end_date?: string | null;
   currency?: string;
   reminder_days?: number;
+  schedule_margin_minutes?: number;
+  routing_provider?: string;
+  routing_optimism?: number;
+  routing_avoid_tolls?: boolean | number;
+  routing_avoid_highways?: boolean | number;
+  routing_avoid_ferries?: boolean | number;
   day_count?: number;
+}
+
+function normalizeScheduleMarginMinutes(value: unknown, fallback = 0): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.round(n);
+}
+
+type RoutingProvider = 'osrm' | 'google_maps' | 'google_maps_mobile';
+
+function normalizeRoutingProvider(value: unknown, fallback: RoutingProvider = 'osrm'): RoutingProvider {
+  if (value === 'osrm' || value === 'google_maps' || value === 'google_maps_mobile') return value;
+  return fallback === 'google_maps' || fallback === 'google_maps_mobile' ? fallback : 'osrm';
+}
+
+function normalizeRoutingOptimism(value: unknown, fallback = 0.33): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(1, Math.max(0, n));
+}
+
+function normalizeRoutingAvoidFlag(value: unknown, fallback = 0): number {
+  if (value === undefined || value === null || value === '') return fallback ? 1 : 0;
+  if (value === true || value === 1 || value === '1') return 1;
+  if (value === false || value === 0 || value === '0') return 0;
+  return fallback ? 1 : 0;
 }
 
 export function createTrip(userId: number, data: CreateTripData, maxDays?: number) {
   const rd = data.reminder_days !== undefined
     ? (Number(data.reminder_days) >= 0 && Number(data.reminder_days) <= 30 ? Number(data.reminder_days) : 3)
     : 3;
+  const scheduleMargin = normalizeScheduleMarginMinutes(data.schedule_margin_minutes, 0);
+  const routingProvider = normalizeRoutingProvider(data.routing_provider, 'osrm');
+  const routingOptimism = normalizeRoutingOptimism(data.routing_optimism, 0.33);
+  const routingAvoidTolls = normalizeRoutingAvoidFlag(data.routing_avoid_tolls, 0);
+  const routingAvoidHighways = normalizeRoutingAvoidFlag(data.routing_avoid_highways, 0);
+  const routingAvoidFerries = normalizeRoutingAvoidFlag(data.routing_avoid_ferries, 0);
 
   const result = db.prepare(`
-    INSERT INTO trips (user_id, title, description, start_date, end_date, currency, reminder_days)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(userId, data.title, data.description || null, data.start_date || null, data.end_date || null, data.currency || 'EUR', rd);
+    INSERT INTO trips (user_id, title, description, start_date, end_date, currency, reminder_days, schedule_margin_minutes, routing_provider, routing_optimism, routing_avoid_tolls, routing_avoid_highways, routing_avoid_ferries)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(userId, data.title, data.description || null, data.start_date || null, data.end_date || null, data.currency || 'EUR', rd, scheduleMargin, routingProvider, routingOptimism, routingAvoidTolls, routingAvoidHighways, routingAvoidFerries);
 
   const tripId = result.lastInsertRowid;
   generateDays(tripId, data.start_date || null, data.end_date || null, maxDays, data.day_count);
@@ -212,6 +252,12 @@ interface UpdateTripData {
   is_archived?: boolean | number;
   cover_image?: string;
   reminder_days?: number;
+  schedule_margin_minutes?: number;
+  routing_provider?: string;
+  routing_optimism?: number;
+  routing_avoid_tolls?: boolean | number;
+  routing_avoid_highways?: boolean | number;
+  routing_avoid_ferries?: boolean | number;
   day_count?: number;
 }
 
@@ -229,7 +275,7 @@ export function updateTrip(tripId: string | number, userId: number, data: Update
   const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(tripId) as Trip & { reminder_days?: number } | undefined;
   if (!trip) throw new NotFoundError('Trip not found');
 
-  const { title, description, start_date, end_date, currency, is_archived, cover_image, reminder_days } = data;
+  const { title, description, start_date, end_date, currency, is_archived, cover_image, reminder_days, schedule_margin_minutes, routing_provider, routing_optimism, routing_avoid_tolls, routing_avoid_highways, routing_avoid_ferries } = data;
 
   if (start_date && end_date && new Date(end_date) < new Date(start_date))
     throw new ValidationError('End date must be after start date');
@@ -245,12 +291,38 @@ export function updateTrip(tripId: string | number, userId: number, data: Update
   const newReminder = reminder_days !== undefined
     ? (Number(reminder_days) >= 0 && Number(reminder_days) <= 30 ? Number(reminder_days) : oldReminder)
     : oldReminder;
+  const oldScheduleMargin = normalizeScheduleMarginMinutes((trip as any).schedule_margin_minutes, 0);
+  const newScheduleMargin = schedule_margin_minutes !== undefined
+    ? normalizeScheduleMarginMinutes(schedule_margin_minutes, oldScheduleMargin)
+    : oldScheduleMargin;
+  const oldRoutingProvider = normalizeRoutingProvider((trip as any).routing_provider, 'osrm');
+  const newRoutingProvider = routing_provider !== undefined
+    ? normalizeRoutingProvider(routing_provider, oldRoutingProvider)
+    : oldRoutingProvider;
+  const oldRoutingOptimism = normalizeRoutingOptimism((trip as any).routing_optimism, 0.33);
+  const newRoutingOptimism = routing_optimism !== undefined
+    ? normalizeRoutingOptimism(routing_optimism, oldRoutingOptimism)
+    : oldRoutingOptimism;
+  const oldRoutingAvoidTolls = normalizeRoutingAvoidFlag((trip as any).routing_avoid_tolls, 0);
+  const newRoutingAvoidTolls = routing_avoid_tolls !== undefined
+    ? normalizeRoutingAvoidFlag(routing_avoid_tolls, oldRoutingAvoidTolls)
+    : oldRoutingAvoidTolls;
+  const oldRoutingAvoidHighways = normalizeRoutingAvoidFlag((trip as any).routing_avoid_highways, 0);
+  const newRoutingAvoidHighways = routing_avoid_highways !== undefined
+    ? normalizeRoutingAvoidFlag(routing_avoid_highways, oldRoutingAvoidHighways)
+    : oldRoutingAvoidHighways;
+  const oldRoutingAvoidFerries = normalizeRoutingAvoidFlag((trip as any).routing_avoid_ferries, 0);
+  const newRoutingAvoidFerries = routing_avoid_ferries !== undefined
+    ? normalizeRoutingAvoidFlag(routing_avoid_ferries, oldRoutingAvoidFerries)
+    : oldRoutingAvoidFerries;
 
   db.prepare(`
     UPDATE trips SET title=?, description=?, start_date=?, end_date=?,
-      currency=?, is_archived=?, cover_image=?, reminder_days=?, updated_at=CURRENT_TIMESTAMP
+      currency=?, is_archived=?, cover_image=?, reminder_days=?, schedule_margin_minutes=?,
+      routing_provider=?, routing_optimism=?, routing_avoid_tolls=?, routing_avoid_highways=?, routing_avoid_ferries=?,
+      updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(newTitle, newDesc, newStart || null, newEnd || null, newCurrency, newArchived, newCover, newReminder, tripId);
+  `).run(newTitle, newDesc, newStart || null, newEnd || null, newCurrency, newArchived, newCover, newReminder, newScheduleMargin, newRoutingProvider, newRoutingOptimism, newRoutingAvoidTolls, newRoutingAvoidHighways, newRoutingAvoidFerries, tripId);
 
   if (trip.start_date && trip.end_date && newStart && newStart !== trip.start_date)
     shiftOwnerEntriesForTripWindow(trip.user_id, trip.start_date, trip.end_date, newStart);
@@ -264,6 +336,12 @@ export function updateTrip(tripId: string | number, userId: number, data: Update
   if (newStart !== trip.start_date) changes.start_date = newStart;
   if (newEnd !== trip.end_date) changes.end_date = newEnd;
   if (newReminder !== oldReminder) changes.reminder_days = newReminder === 0 ? 'none' : `${newReminder} days`;
+  if (newScheduleMargin !== oldScheduleMargin) changes.schedule_margin_minutes = `${newScheduleMargin} min`;
+  if (newRoutingProvider !== oldRoutingProvider) changes.routing_provider = newRoutingProvider;
+  if (newRoutingOptimism !== oldRoutingOptimism) changes.routing_optimism = newRoutingOptimism;
+  if (newRoutingAvoidTolls !== oldRoutingAvoidTolls) changes.routing_avoid_tolls = !!newRoutingAvoidTolls;
+  if (newRoutingAvoidHighways !== oldRoutingAvoidHighways) changes.routing_avoid_highways = !!newRoutingAvoidHighways;
+  if (newRoutingAvoidFerries !== oldRoutingAvoidFerries) changes.routing_avoid_ferries = !!newRoutingAvoidFerries;
   if (is_archived !== undefined && newArchived !== trip.is_archived) changes.archived = !!newArchived;
 
   const isAdminEdit = userRole === 'admin' && trip.user_id !== userId;
@@ -432,6 +510,21 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
     }
     return d.replace(/[-:]/g, '');
   };
+  const parseClockMinutes = (time?: string | null) => {
+    if (!time) return 8 * 60;
+    const [h, m] = time.split(':').map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : 8 * 60;
+  };
+  const normalizeDuration = (value: unknown) => {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 60;
+  };
+  const scheduleMargin = normalizeScheduleMarginMinutes(trip.schedule_margin_minutes, 0);
+  const fmtDayMinutes = (date: string, minutes: number) => {
+    const dt = new Date(date + 'T00:00:00Z');
+    dt.setUTCMinutes(dt.getUTCMinutes() + Math.round(minutes));
+    return dt.toISOString().slice(0, 16).replace(/[-:]/g, '') + '00';
+  };
 
   let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//TREK//Travel Planner//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n';
   ics += `X-WR-CALNAME:${esc(trip.title || 'TREK Trip')}\r\n`;
@@ -453,8 +546,7 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
 
     const assignments = db.prepare(`
       SELECT da.*, p.name as place_name, p.address as place_address,
-        COALESCE(da.assignment_time, p.place_time) as effective_time,
-        COALESCE(da.assignment_end_time, p.end_time) as effective_end_time
+        p.duration_minutes as place_duration_minutes
       FROM day_assignments da
       JOIN places p ON da.place_id = p.id
       WHERE da.day_id = ?
@@ -465,16 +557,13 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
       'SELECT * FROM day_notes WHERE day_id = ? ORDER BY sort_order ASC, created_at ASC'
     ).all(day.id) as any[];
 
-    const timed = assignments.filter(a => a.effective_time);
-    const untimed = assignments.filter(a => !a.effective_time);
-
-    // Timed assignments → individual events
-    for (const a of timed) {
+    // Activity assignment times are calculated, never read from legacy place start/end fields.
+    let activityCursor = parseClockMinutes(day.wake_up_time);
+    for (const a of assignments) {
+      const duration = normalizeDuration(a.duration_minutes ?? a.place_duration_minutes);
       ics += `BEGIN:VEVENT\r\nUID:${uid(a.id, 'assign')}\r\nDTSTAMP:${now}\r\n`;
-      ics += `DTSTART:${fmtDateTime(a.effective_time, day.date + 'T00:00')}\r\n`;
-      if (a.effective_end_time) {
-        ics += `DTEND:${fmtDateTime(a.effective_end_time, day.date + 'T00:00')}\r\n`;
-      }
+      ics += `DTSTART:${fmtDayMinutes(day.date, activityCursor)}\r\n`;
+      ics += `DTEND:${fmtDayMinutes(day.date, activityCursor + duration)}\r\n`;
       ics += `SUMMARY:${esc(a.place_name)}\r\n`;
       let desc = '';
       if (a.notes) desc += a.notes;
@@ -482,10 +571,11 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
       if (desc) ics += `DESCRIPTION:${esc(desc)}\r\n`;
       if (a.place_address) ics += `LOCATION:${esc(a.place_address)}\r\n`;
       ics += `END:VEVENT\r\n`;
+      activityCursor += duration + scheduleMargin;
     }
 
-    // Build all-day summary event if there are untimed activities or notes
-    if (untimed.length > 0 || notes.length > 0) {
+    // Build all-day summary event for notes.
+    if (notes.length > 0) {
       const dayTitle = day.title || `Day ${day.day_number}`;
       const endNext = new Date(day.date + 'T00:00:00');
       endNext.setDate(endNext.getDate() + 1);
@@ -496,16 +586,7 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
       ics += `SUMMARY:${esc(dayTitle)}\r\n`;
 
       let desc = '';
-      if (untimed.length > 0) {
-        desc += untimed.map(a => {
-          let line = `• ${a.place_name}`;
-          if (a.place_address) line += ` (${a.place_address})`;
-          if (a.notes) line += ` — ${a.notes}`;
-          return line;
-        }).join('\n');
-      }
       if (notes.length > 0) {
-        if (desc) desc += '\n\n';
         desc += 'Notes:\n' + notes.map(n => {
           let line = n.time ? `${n.time} — ${n.text}` : `• ${n.text}`;
           return line;
@@ -614,16 +695,31 @@ export function copyTripById(sourceTripId: string | number, newOwnerId: number, 
 
   const fn = db.transaction(() => {
     const tripResult = db.prepare(`
-      INSERT INTO trips (user_id, title, description, start_date, end_date, currency, cover_image, is_archived, reminder_days)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-    `).run(newOwnerId, newTitle, src.description, src.start_date, src.end_date, src.currency, src.cover_image, src.reminder_days ?? 3);
+      INSERT INTO trips (user_id, title, description, start_date, end_date, currency, cover_image, is_archived, reminder_days, schedule_margin_minutes, routing_provider, routing_optimism, routing_avoid_tolls, routing_avoid_highways, routing_avoid_ferries)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      newOwnerId,
+      newTitle,
+      src.description,
+      src.start_date,
+      src.end_date,
+      src.currency,
+      src.cover_image,
+      src.reminder_days ?? 3,
+      src.schedule_margin_minutes ?? 0,
+      normalizeRoutingProvider(src.routing_provider, 'osrm'),
+      normalizeRoutingOptimism(src.routing_optimism, 0.33),
+      normalizeRoutingAvoidFlag(src.routing_avoid_tolls, 0),
+      normalizeRoutingAvoidFlag(src.routing_avoid_highways, 0),
+      normalizeRoutingAvoidFlag(src.routing_avoid_ferries, 0),
+    );
     const newTripId = tripResult.lastInsertRowid;
 
     const oldDays = db.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(sourceTripId) as any[];
     const dayMap = new Map<number, number | bigint>();
-    const insertDay = db.prepare('INSERT INTO days (trip_id, day_number, date, notes, title) VALUES (?, ?, ?, ?, ?)');
+    const insertDay = db.prepare('INSERT INTO days (trip_id, day_number, date, notes, title, wake_up_time) VALUES (?, ?, ?, ?, ?, ?)');
     for (const d of oldDays) {
-      const r = insertDay.run(newTripId, d.day_number, d.date, d.notes, d.title);
+      const r = insertDay.run(newTripId, d.day_number, d.date, d.notes, d.title, d.wake_up_time ?? '08:00');
       dayMap.set(d.id, r.lastInsertRowid);
     }
 
@@ -638,7 +734,7 @@ export function copyTripById(sourceTripId: string | number, newOwnerId: number, 
     for (const p of oldPlaces) {
       const r = insertPlace.run(newTripId, p.name, p.description, p.lat, p.lng, p.address, p.category_id,
         p.price, p.currency, p.reservation_status, p.reservation_notes, p.reservation_datetime,
-        p.place_time, p.end_time, p.duration_minutes, p.notes, p.image_url, p.google_place_id,
+        null, null, p.duration_minutes, p.notes, p.image_url, p.google_place_id,
         p.google_ftid, p.website, p.phone, p.transport_mode, p.osm_id);
       placeMap.set(p.id, r.lastInsertRowid);
     }
@@ -657,16 +753,21 @@ export function copyTripById(sourceTripId: string | number, newOwnerId: number, 
     `).all(sourceTripId) as any[];
     const assignmentMap = new Map<number, number | bigint>();
     const insertAssignment = db.prepare(`
-      INSERT INTO day_assignments (day_id, place_id, order_index, notes, reservation_status, reservation_notes, reservation_datetime, assignment_time, assignment_end_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO day_assignments (
+        day_id, place_id, order_index, notes, duration_minutes,
+        margin_before_minutes, margin_after_minutes,
+        reservation_status, reservation_notes, reservation_datetime, assignment_time, assignment_end_time
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const a of oldAssignments) {
       const newDayId = dayMap.get(a.day_id);
       const newPlaceId = placeMap.get(a.place_id);
       if (newDayId && newPlaceId) {
-        const r = insertAssignment.run(newDayId, newPlaceId, a.order_index, a.notes,
+        const r = insertAssignment.run(newDayId, newPlaceId, a.order_index, a.notes, a.duration_minutes ?? 60,
+          a.margin_before_minutes ?? 0, a.margin_after_minutes ?? 0,
           a.reservation_status, a.reservation_notes, a.reservation_datetime,
-          a.assignment_time, a.assignment_end_time);
+          null, null);
         assignmentMap.set(a.id, r.lastInsertRowid);
       }
     }

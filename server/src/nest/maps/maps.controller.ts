@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { createReadStream } from 'node:fs';
+import type { GoogleMapsMobileDirectionsResult } from '../../services/googleMapsMobileDirections';
+import type { GoogleMapsPreviewDirectionsResult } from '../../services/googleMapsPreviewDirections';
 import type {
   MapsAutocompleteResult,
   MapsPlaceDetailsResult,
@@ -219,6 +221,28 @@ export class MapsController {
       const message = err instanceof Error ? err.message : 'Failed to resolve URL';
       console.error('[Maps] URL resolve error:', message);
       throw toHttpException(err, 'Failed to resolve URL', 400);
+    }
+  }
+
+  @Post('directions-preview')
+  @HttpCode(200)
+  async directionsPreview(@Body() body: unknown): Promise<GoogleMapsPreviewDirectionsResult> {
+    try {
+      return await this.maps.previewDirections(body);
+    } catch (err: unknown) {
+      console.error('Maps directions preview error:', err);
+      throw toHttpException(err, 'Directions preview error', 500);
+    }
+  }
+
+  @Post('directions-mobile')
+  @HttpCode(200)
+  async directionsMobile(@Body() body: unknown): Promise<GoogleMapsMobileDirectionsResult> {
+    try {
+      return await this.maps.mobileDirections(body);
+    } catch (err: unknown) {
+      console.error('Maps mobile directions error:', err);
+      throw toHttpException(err, 'Mobile directions error', 500);
     }
   }
 }

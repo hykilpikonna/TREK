@@ -1,15 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../../tests/helpers/msw/server'
 import {
   calculateRoute,
   calculateSegments,
+  calculateRouteWithLegs,
   optimizeRoute,
   generateGoogleMapsUrl,
   withHotelBookends,
+  __clearRouteCacheForTests,
 } from './RouteCalculator'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
+const OSRM_DRIVING_BASE = 'https://routing.openstreetmap.de/routed-car/route/v1/driving'
 
 const buildOsrmRouteResponse = (distance = 5000, duration = 360) => ({
   code: 'Ok',
@@ -25,6 +28,11 @@ const buildOsrmRouteResponse = (distance = 5000, duration = 360) => ({
 
 const wp1 = { lat: 48.8566, lng: 2.3522 }
 const wp2 = { lat: 48.8600, lng: 2.3600 }
+
+beforeEach(() => {
+  __clearRouteCacheForTests()
+  localStorage.clear()
+})
 
 // ── calculateRoute ─────────────────────────────────────────────────────────────
 
@@ -138,6 +146,169 @@ describe('calculateSegments', () => {
     expect(seg.mid[0]).toBeCloseTo(expectedMid[0])
     expect(seg.mid[1]).toBeCloseTo(expectedMid[1])
     expect(seg.drivingText).toBe('2 min')
+  })
+})
+
+// ── calculateRouteWithLegs persistent cache ─────────────────────────────────
+
+describe('calculateRouteWithLegs persistent cache', () => {
+  it('FE-COMP-ROUTECALCULATOR-021: restores cached route legs after memory cache is cleared', async () => {
+    let calls = 0
+    server.use(
+      http.get(`${OSRM_DRIVING_BASE}/:coords`, () => {
+        calls += 1
+        return HttpResponse.json(buildOsrmRouteResponse(1500, 420))
+      })
+    )
+
+    const first = await calculateRouteWithLegs([wp1, wp2])
+    expect(first.legs[0].duration).toBe(420)
+    expect(calls).toBe(1)
+
+    __clearRouteCacheForTests()
+    const second = await calculateRouteWithLegs([wp1, wp2])
+
+    expect(second.legs[0].duration).toBe(420)
+    expect(calls).toBe(1)
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-022: Google Maps routing uses traffic optimism and caches identical requests', async () => {
+    let calls = 0
+    const bodies: any[] = []
+    server.use(
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        calls += 1
+        const body = await request.json() as any
+        bodies.push(body)
+        expect(body.time).toEqual({ kind: 'departAtLocal', localDateTime: '2026-06-01T09:10' })
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              traffic: {
+                range: { minSeconds: 600, maxSeconds: 1200, text: '10 min to 20 min' },
+              },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const first = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+    })
+    const second = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+    })
+
+    expect(first.legs[0].duration).toBe(1050)
+    expect(first.duration).toBe(1050)
+    expect(first.distance).toBe(1200)
+    expect(first.coordinates).toEqual([[wp1.lat, wp1.lng], [wp2.lat, wp2.lng]])
+    expect(second.legs[0].duration).toBe(1050)
+    expect(calls).toBe(1)
+    expect(bodies[0]).toMatchObject({
+      avoidTolls: false,
+      avoidHighways: false,
+      avoidFerries: false,
+    })
+
+    await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+      google: { avoidTolls: true, avoidHighways: true, avoidFerries: false },
+    })
+
+    expect(calls).toBe(2)
+    expect(bodies[1]).toMatchObject({
+      avoidTolls: true,
+      avoidHighways: true,
+      avoidFerries: false,
+    })
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-023: Google Maps mobile routing uses traffic prediction range', async () => {
+    let calls = 0
+    const bodies: any[] = []
+    server.use(
+      http.post('/api/maps/directions-mobile', async ({ request }) => {
+        calls += 1
+        const body = await request.json() as any
+        bodies.push(body)
+        expect(body.departureTime).toEqual({ kind: 'departAtLocal', localDateTime: '2026-06-01T09:10' })
+        return HttpResponse.json({
+          optimisticDuration: { seconds: 600, text: '10 min' },
+          pessimisticDuration: { seconds: 1200, text: '20 min' },
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 900, text: '15 min' },
+              trafficPrediction: {
+                optimistic: { seconds: 600, text: '10 min' },
+                pessimistic: { seconds: 1200, text: '20 min' },
+                text: '10 min to 20 min',
+              },
+              tollFee: { amount: 8620, text: '\u00a58620', currency: 'JPY', label: 'ETC' },
+              overviewGeometry: [
+                { lat: body.from.lat, lng: body.from.lng },
+                { lat: 48.858, lng: 2.356 },
+                { lat: body.to.lat, lng: body.to.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const first = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps_mobile',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+      google: { avoidTolls: true, avoidHighways: false, avoidFerries: true },
+    })
+    const second = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps_mobile',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+      google: { avoidTolls: true, avoidHighways: false, avoidFerries: true },
+    })
+
+    expect(first.legs[0].duration).toBe(1050)
+    expect(first.duration).toBe(1050)
+    expect(first.distance).toBe(1200)
+    expect(first.coordinates).toEqual([[wp1.lat, wp1.lng], [48.858, 2.356], [wp2.lat, wp2.lng]])
+    expect(first.legs[0].tollText).toBe('ETC \u00a58620')
+    expect(second.legs[0].duration).toBe(1050)
+    expect(calls).toBe(1)
+    expect(bodies[0].options).toMatchObject({
+      avoidTolls: true,
+      avoidHighways: false,
+      avoidFerries: true,
+    })
+
+    await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps_mobile',
+      optimism: 0.25,
+      departureLocalDateTime: '2026-06-01T09:10',
+      google: { avoidTolls: false, avoidHighways: true, avoidFerries: false },
+    })
+
+    expect(calls).toBe(2)
+    expect(bodies[1].options).toMatchObject({
+      avoidTolls: false,
+      avoidHighways: true,
+      avoidFerries: false,
+    })
   })
 })
 

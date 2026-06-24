@@ -34,6 +34,12 @@ export interface Trip {
   cover_image?: string | null;
   is_archived: number;
   reminder_days: number;
+  schedule_margin_minutes?: number;
+  routing_provider?: 'osrm' | 'google_maps' | 'google_maps_mobile';
+  routing_optimism?: number;
+  routing_avoid_tolls?: number | boolean;
+  routing_avoid_highways?: number | boolean;
+  routing_avoid_ferries?: number | boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -45,6 +51,7 @@ export interface Day {
   date?: string | null;
   notes?: string | null;
   title?: string | null;
+  wake_up_time?: string | null;
 }
 
 export interface Place {
@@ -99,6 +106,9 @@ export interface DayAssignment {
   place_id: number;
   order_index: number;
   notes?: string | null;
+  duration_minutes?: number | null;
+  margin_before_minutes?: number | null;
+  margin_after_minutes?: number | null;
   reservation_status?: string;
   reservation_notes?: string | null;
   reservation_datetime?: string | null;
@@ -320,6 +330,8 @@ export interface AssignmentRow extends DayAssignment {
   place_time: string | null;
   end_time: string | null;
   duration_minutes: number;
+  margin_before_minutes: number;
+  margin_after_minutes: number;
   place_notes: string | null;
   image_url: string | null;
   transport_mode: string;

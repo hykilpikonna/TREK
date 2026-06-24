@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Modal from '../shared/Modal'
-import { Calendar, Camera, Search, X, UserPlus, Bell } from 'lucide-react'
+import { Calendar, Camera, Search, X, Clipboard, UserPlus, Bell, Clock, Route as RouteIcon } from 'lucide-react'
 import { tripsApi, authApi } from '../../api/client'
 import CustomSelect from '../shared/CustomSelect'
 import { useAuthStore } from '../../store/authStore'
@@ -10,7 +10,15 @@ import { useTranslation } from '../../i18n'
 import { CustomDatePicker } from '../shared/CustomDateTimePicker'
 import { normalizeImageFile } from '../../utils/convertHeic'
 import { getApiErrorMessage, type Trip } from '../../types'
+import { formatDurationInput, parseDurationMinutes } from '../../utils/durationInput'
 import type { TripCreateRequest } from '@trek/shared'
+
+type RoutingProvider = 'osrm' | 'google_maps' | 'google_maps_mobile'
+
+function normalizeRoutingProvider(value: unknown): RoutingProvider {
+  if (value === 'google_maps' || value === 'google_maps_mobile') return value
+  return 'osrm'
+}
 
 interface TripFormModalProps {
   isOpen: boolean
@@ -49,6 +57,12 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
     start_date: '',
     end_date: '',
     reminder_days: 0 as number,
+    schedule_margin_minutes: '0m',
+    routing_provider: 'osrm' as RoutingProvider,
+    routing_optimism: 0.33,
+    routing_avoid_tolls: false,
+    routing_avoid_highways: false,
+    routing_avoid_ferries: false,
     day_count: 7 as number | '',
   })
   const [customReminder, setCustomReminder] = useState(false)
@@ -76,13 +90,32 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         start_date: trip.start_date || '',
         end_date: trip.end_date || '',
         reminder_days: rd,
+        schedule_margin_minutes: formatDurationInput(trip.schedule_margin_minutes ?? 0, { allowZero: true }),
+        routing_provider: normalizeRoutingProvider(trip.routing_provider),
+        routing_optimism: Number.isFinite(Number(trip.routing_optimism)) ? Math.min(1, Math.max(0, Number(trip.routing_optimism))) : 0.33,
+        routing_avoid_tolls: trip.routing_avoid_tolls === true || trip.routing_avoid_tolls === 1,
+        routing_avoid_highways: trip.routing_avoid_highways === true || trip.routing_avoid_highways === 1,
+        routing_avoid_ferries: trip.routing_avoid_ferries === true || trip.routing_avoid_ferries === 1,
         day_count: trip.day_count || 7,
       })
       setCustomReminder(![0, 1, 3, 9].includes(rd))
       setCoverPreview(trip.cover_image || null)
       setCoverSearchQuery('')
     } else {
-      setFormData({ title: '', description: '', start_date: '', end_date: '', reminder_days: tripRemindersEnabled ? 3 : 0, day_count: 7 })
+      setFormData({
+        title: '',
+        description: '',
+        start_date: '',
+        end_date: '',
+        reminder_days: tripRemindersEnabled ? 3 : 0,
+        schedule_margin_minutes: '0m',
+        routing_provider: 'osrm',
+        routing_optimism: 0.33,
+        routing_avoid_tolls: false,
+        routing_avoid_highways: false,
+        routing_avoid_ferries: false,
+        day_count: 7,
+      })
       setCustomReminder(false)
       setCoverPreview(null)
       setCoverSearchQuery('')
@@ -125,6 +158,10 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         setError(t('dashboard.dayCountRequired')); return
       }
     }
+    const scheduleMargin = parseDurationMinutes(formData.schedule_margin_minutes, { allowZero: true })
+    if (scheduleMargin == null) {
+      setError(t('trips.scheduleMarginInvalid')); return
+    }
     setIsLoading(true)
     try {
       const result = await onSave({
@@ -133,6 +170,12 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
         start_date: formData.start_date || null,
         end_date: formData.end_date || null,
         reminder_days: formData.reminder_days,
+        schedule_margin_minutes: scheduleMargin,
+        routing_provider: formData.routing_provider,
+        routing_optimism: formData.routing_optimism,
+        routing_avoid_tolls: formData.routing_avoid_tolls,
+        routing_avoid_highways: formData.routing_avoid_highways,
+        routing_avoid_ferries: formData.routing_avoid_ferries,
         ...(!formData.start_date && !formData.end_date ? { day_count: Number(formData.day_count) } : {}),
       })
       const createdTrip = result ? result.trip : undefined
@@ -439,6 +482,88 @@ export default function TripFormModal({ isOpen, onClose, onSave, trip, onCoverUp
               }}
               className={inputCls} />
             <p className="text-xs text-slate-400 mt-1.5">{t('dashboard.dayCountHint')}</p>
+          </div>
+        )}
+
+        <div>
+          <label htmlFor="trip-schedule-margin-input" className="block text-sm font-medium text-slate-700 mb-1.5">
+            <Clock className="inline w-4 h-4 mr-1" />{t('trips.scheduleMargin')}
+          </label>
+          <input
+            id="trip-schedule-margin-input"
+            type="text"
+            inputMode="text"
+            value={formData.schedule_margin_minutes}
+            onChange={e => canEditTrip && update('schedule_margin_minutes', e.target.value)}
+            readOnly={!canEditTrip}
+            placeholder={t('places.durationPlaceholder')}
+            className={inputCls}
+          />
+          <p className="text-xs text-slate-400 mt-1.5">{t('trips.scheduleMarginHint')}</p>
+        </div>
+
+        <div>
+          <label htmlFor="trip-routing-provider-input" className="block text-sm font-medium text-slate-700 mb-1.5">
+            <RouteIcon className="inline w-4 h-4 mr-1" />{t('trips.routingProvider')}
+          </label>
+          <select
+            id="trip-routing-provider-input"
+            value={formData.routing_provider}
+            onChange={e => canEditTrip && update('routing_provider', normalizeRoutingProvider(e.target.value))}
+            disabled={!canEditTrip}
+            className={inputCls}
+          >
+            <option value="osrm">{t('trips.routingProviderOsrm')}</option>
+            <option value="google_maps">{t('trips.routingProviderGoogle')}</option>
+            <option value="google_maps_mobile">{t('trips.routingProviderGoogleMobile')}</option>
+          </select>
+          <p className="text-xs text-slate-400 mt-1.5">{t('trips.routingProviderHint')}</p>
+        </div>
+
+        {(formData.routing_provider === 'google_maps' || formData.routing_provider === 'google_maps_mobile') && (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="trip-routing-optimism-input" className="block text-sm font-medium text-slate-700 mb-1.5">
+                {t('trips.routingOptimism')} <span className="text-slate-400 font-normal">{formData.routing_optimism.toFixed(2)}</span>
+              </label>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-500 w-20">{t('trips.routingPessimistic')}</span>
+                <input
+                  id="trip-routing-optimism-input"
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={formData.routing_optimism}
+                  onChange={e => canEditTrip && update('routing_optimism', Math.min(1, Math.max(0, Number(e.target.value))))}
+                  disabled={!canEditTrip}
+                  className="flex-1"
+                />
+                <span className="text-xs text-slate-500 w-20 text-right">{t('trips.routingOptimistic')}</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1.5">{t('trips.routingOptimismHint')}</p>
+            </div>
+            <div>
+              <div className="block text-sm font-medium text-slate-700 mb-1.5">{t('trips.routingAvoid')}</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {([
+                  ['routing_avoid_tolls', t('trips.routingAvoidTolls')],
+                  ['routing_avoid_highways', t('trips.routingAvoidHighways')],
+                  ['routing_avoid_ferries', t('trips.routingAvoidFerries')],
+                ] as const).map(([field, label]) => (
+                  <label key={field} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-200 rounded-lg px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData[field])}
+                      onChange={e => canEditTrip && update(field, e.target.checked)}
+                      disabled={!canEditTrip}
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-300"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

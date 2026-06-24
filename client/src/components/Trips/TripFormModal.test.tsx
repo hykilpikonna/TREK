@@ -155,6 +155,65 @@ describe('TripFormModal', () => {
     expect(screen.queryByText('Number of Days')).not.toBeInTheDocument();
   });
 
+  it('FE-COMP-TRIPFORM-018b: submits a flexible trip schedule margin', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue({ trip: buildTrip({ id: 99 }) });
+    render(<TripFormModal {...defaultProps} onSave={onSave} trip={null} />);
+    await user.type(screen.getByPlaceholderText(/Summer in Japan/i), 'Margin Trip');
+    const marginInput = screen.getByLabelText('Schedule margin');
+    await user.clear(marginInput);
+    await user.type(marginInput, '15 min');
+    const submitBtn = screen.getAllByText('Create New Trip').find(el => el.closest('button'))!;
+    await user.click(submitBtn.closest('button')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ schedule_margin_minutes: 15 }));
+  });
+
+  it('FE-COMP-TRIPFORM-018c: submits routing provider and optimism settings', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue({ trip: buildTrip({ id: 99 }) });
+    render(<TripFormModal {...defaultProps} onSave={onSave} trip={null} />);
+    await user.type(screen.getByPlaceholderText(/Summer in Japan/i), 'Traffic Trip');
+    fireEvent.change(screen.getByLabelText('Estimated Driving Time'), { target: { value: 'google_maps' } });
+    expect(screen.getByText(/0 uses Google Maps' slowest traffic estimate/i)).toBeInTheDocument();
+    const optimismInput = screen.getByLabelText(/Optimism/i);
+    fireEvent.change(optimismInput, { target: { value: '0.75' } });
+    await user.click(screen.getByLabelText('Tolls'));
+    await user.click(screen.getByLabelText('Ferries'));
+    const submitBtn = screen.getAllByText('Create New Trip').find(el => el.closest('button'))!;
+    await user.click(submitBtn.closest('button')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      routing_provider: 'google_maps',
+      routing_optimism: 0.75,
+      routing_avoid_tolls: true,
+      routing_avoid_highways: false,
+      routing_avoid_ferries: true,
+    }));
+  });
+
+  it('FE-COMP-TRIPFORM-018d: offers Google Maps mobile routing with optimism and avoid toggles', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue({ trip: buildTrip({ id: 99 }) });
+    render(<TripFormModal {...defaultProps} onSave={onSave} trip={null} />);
+    await user.type(screen.getByPlaceholderText(/Summer in Japan/i), 'Mobile Traffic Trip');
+    fireEvent.change(screen.getByLabelText('Estimated Driving Time'), { target: { value: 'google_maps_mobile' } });
+
+    expect(screen.getByText('Google Maps (Mobile)')).toBeInTheDocument();
+    expect(screen.getByText(/0 uses Google Maps' slowest traffic estimate/i)).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Highways'));
+
+    const submitBtn = screen.getAllByText('Create New Trip').find(el => el.closest('button'))!;
+    await user.click(submitBtn.closest('button')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      routing_provider: 'google_maps_mobile',
+      routing_avoid_tolls: false,
+      routing_avoid_highways: true,
+      routing_avoid_ferries: false,
+    }));
+  });
+
   it('FE-COMP-TRIPFORM-019: reminder buttons visible when tripRemindersEnabled=true', async () => {
     seedStore(useAuthStore, { tripRemindersEnabled: true });
     render(<TripFormModal {...defaultProps} trip={null} />);
