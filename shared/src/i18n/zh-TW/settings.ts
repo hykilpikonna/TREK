@@ -29,7 +29,7 @@ const settings: TranslationStrings = {
   'settings.mapStylePlaceholder': '選擇 Mapbox 樣式',
   'settings.mapStyleHint': '預設或您自己的 mapbox://styles/USER/ID URL',
   'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
-  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or OpenFreeMap style URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': '3D 建築和地形',
   'settings.map3dHint': '傾斜 + 真實 3D 建築拉伸 — 適用於所有樣式,包括衛星。',
   'settings.mapHighQuality': '高畫質模式',

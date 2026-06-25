@@ -29,7 +29,7 @@ const settings: TranslationStrings = {
   'settings.mapStylePlaceholder': 'Vyberte styl Mapbox',
   'settings.mapStyleHint': 'Preset nebo vaše vlastní URL mapbox://styles/USER/ID',
   'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
-  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or OpenFreeMap style URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': '3D budovy a terén',
   'settings.map3dHint': 'Náklon + skutečné 3D vyvýšení budov — funguje s každým stylem, včetně satelitu.',
   'settings.mapHighQuality': 'Režim vysoké kvality',

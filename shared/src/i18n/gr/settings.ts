@@ -30,7 +30,7 @@ const settings: TranslationStrings = {
   'settings.mapStylePlaceholder': 'Επιλέξτε ένα στυλ Mapbox',
   'settings.mapStyleHint': 'Προκαθορισμένο ή δικό σας mapbox://styles/USER/ID URL',
   'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
-  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or OpenFreeMap style URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': '3D Κτίρια & Ανάγλυφο',
   'settings.map3dHint':
     'Κλίση + πραγματικές 3D προεξοχές κτιρίων — λειτουργεί σε κάθε στυλ, συμπεριλαμβανομένου του δορυφορικού.',

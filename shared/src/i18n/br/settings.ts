@@ -29,7 +29,7 @@ const settings: TranslationStrings = {
   'settings.mapStylePlaceholder': 'Selecionar um estilo Mapbox',
   'settings.mapStyleHint': 'Preset ou sua própria URL mapbox://styles/USER/ID',
   'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
-  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or OpenFreeMap style URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': 'Prédios 3D & terreno',
   'settings.map3dHint': 'Inclinação + extrusões 3D reais de prédios — funciona em todo estilo, incluindo satélite.',
   'settings.mapHighQuality': 'Modo alta qualidade',

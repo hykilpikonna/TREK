@@ -43,6 +43,8 @@ export function isOpenFreeMapStyle(style?: string | null): boolean {
 export function normalizeStyleForProvider(provider: GlMapProvider, style?: string | null): string {
   const trimmed = (style || '').trim()
   if (!trimmed) return defaultStyleForProvider(provider)
-  if (provider === 'maplibre-gl' && trimmed.startsWith('mapbox://')) return OPENFREEMAP_DEFAULT_STYLE
+  if (provider === 'maplibre-gl') {
+    return isOpenFreeMapStyle(trimmed) ? trimmed : OPENFREEMAP_DEFAULT_STYLE
+  }
   return trimmed
 }
