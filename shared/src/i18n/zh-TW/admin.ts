@@ -327,6 +327,7 @@ const admin: TranslationStrings = {
   'admin.defaultSettings.mapProviderHint': '此執行個體上所有人的預設地圖。每位使用者仍可在自己的設定中覆寫此項。',
   'admin.defaultSettings.providerLeaflet': '標準（免費）',
   'admin.defaultSettings.providerMapbox': 'Mapbox（3D）',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': '共用的 Mapbox 權杖',
   'admin.defaultSettings.mapboxTokenHint':
     '用於每一位尚未輸入自己權杖的使用者 — 如此整個執行個體都能使用 Mapbox，而無需個別共享金鑰。以加密方式儲存。',

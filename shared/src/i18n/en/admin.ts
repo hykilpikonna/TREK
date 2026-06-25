@@ -184,6 +184,7 @@ const admin: TranslationStrings = {
     'The default map for everyone on this instance. Each user can still override it in their own settings.',
   'admin.defaultSettings.providerLeaflet': 'Standard (free)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Shared Mapbox token',
   'admin.defaultSettings.mapboxTokenHint':
     'Used for every user who has not entered their own token — so the whole instance gets Mapbox without sharing the key individually. Stored encrypted.',

@@ -37,8 +37,9 @@ const JourneyMapAuto = forwardRef<JourneyMapAutoHandle, Props>(function JourneyM
   const glRef = useRef<JourneyMapGLHandle>(null)
 
   // Fall back to Leaflet when the user selected Mapbox GL but hasn't
-  // supplied a token yet — otherwise the map would just show a stub.
-  const useGL = provider === 'mapbox-gl' && !!token
+  // supplied a token yet. MapLibre/OpenFreeMap is tokenless.
+  const useGL = provider === 'maplibre-gl' || (provider === 'mapbox-gl' && !!token)
+  const glProvider = provider === 'maplibre-gl' ? 'maplibre-gl' : 'mapbox-gl'
 
   useImperativeHandle(ref, () => ({
     highlightMarker: (id) => (useGL ? glRef.current : leafletRef.current)?.highlightMarker(id),
@@ -48,7 +49,7 @@ const JourneyMapAuto = forwardRef<JourneyMapAutoHandle, Props>(function JourneyM
 
   if (useGL) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return <JourneyMapGL ref={glRef} {...(props as any)} />
+    return <JourneyMapGL ref={glRef} {...(props as any)} glProvider={glProvider} />
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return <JourneyMap ref={leafletRef} {...(props as any)} />

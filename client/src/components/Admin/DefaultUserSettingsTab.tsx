@@ -8,6 +8,14 @@ import CustomSelect from '../shared/CustomSelect'
 import { MapView } from '../Map/MapView'
 import { CURRENCIES, SYMBOLS } from '../Budget/BudgetPanel.constants'
 import type { Place } from '../../types'
+import {
+  MAPBOX_DEFAULT_STYLE,
+  defaultStyleForProvider,
+  getStylePresets,
+  isOpenFreeMapStyle,
+  normalizeStyleForProvider,
+  type GlMapProvider,
+} from '../Map/glProviders'
 
 const MAP_PRESETS = [
   { name: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
@@ -31,14 +39,17 @@ type Defaults = {
   mapbox_quality_mode?: boolean
 }
 
-const MAPBOX_STYLE_PRESETS = [
-  { name: 'Standard', url: 'mapbox://styles/mapbox/standard' },
-  { name: 'Streets', url: 'mapbox://styles/mapbox/streets-v12' },
-  { name: 'Outdoors', url: 'mapbox://styles/mapbox/outdoors-v12' },
-  { name: 'Light', url: 'mapbox://styles/mapbox/light-v11' },
-  { name: 'Dark', url: 'mapbox://styles/mapbox/dark-v11' },
-  { name: 'Satellite Streets', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
-]
+type MapProvider = 'leaflet' | GlMapProvider
+
+function normalizeProvider(value: unknown): MapProvider {
+  return value === 'mapbox-gl' || value === 'maplibre-gl' ? value : 'leaflet'
+}
+
+function styleForProvider(provider: MapProvider, style?: string | null): string {
+  if (provider === 'leaflet') return style || MAPBOX_DEFAULT_STYLE
+  if (provider === 'mapbox-gl' && isOpenFreeMapStyle(style)) return MAPBOX_DEFAULT_STYLE
+  return normalizeStyleForProvider(provider, style)
+}
 
 function OptionRow({
   label,
@@ -98,10 +109,11 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
 
   useEffect(() => {
     adminApi.getDefaultUserSettings().then((data: Defaults) => {
+      const provider = normalizeProvider(data.map_provider)
       setDefaults(data)
       setMapTileUrl(data.map_tile_url || '')
       setMapboxToken(data.mapbox_access_token || '')
-      setMapboxStyle(data.mapbox_style || '')
+      setMapboxStyle(provider === 'leaflet' ? (data.mapbox_style || '') : styleForProvider(provider, data.mapbox_style))
       setLoaded(true)
     }).catch(() => setLoaded(true))
   }, [])
@@ -122,7 +134,10 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
       setDefaults(updated)
       if (key === 'map_tile_url') setMapTileUrl('')
       if (key === 'mapbox_access_token') setMapboxToken('')
-      if (key === 'mapbox_style') setMapboxStyle('')
+      if (key === 'mapbox_style') {
+        const provider = normalizeProvider(defaults.map_provider)
+        setMapboxStyle(provider === 'leaflet' ? '' : defaultStyleForProvider(provider))
+      }
       toast.success(t('admin.defaultSettings.reset'))
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : t('common.error'))
@@ -172,6 +187,17 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
   }
 
   const darkMode = defaults.dark_mode
+  const mapProvider = normalizeProvider(defaults.map_provider)
+  const glStylePresets = mapProvider === 'leaflet' ? [] : getStylePresets(mapProvider)
+  const saveMapProvider = (nextProvider: MapProvider) => {
+    const patch: Partial<Defaults> = { map_provider: nextProvider }
+    if (nextProvider !== 'leaflet') {
+      const nextStyle = styleForProvider(nextProvider, mapboxStyle)
+      setMapboxStyle(nextStyle)
+      patch.mapbox_style = nextStyle
+    }
+    save(patch)
+  }
 
   return (
     <Section title={t('admin.defaultSettings.title')} icon={Settings2}>
@@ -316,19 +342,21 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
           {([
             { value: 'leaflet', label: t('admin.defaultSettings.providerLeaflet') },
             { value: 'mapbox-gl', label: t('admin.defaultSettings.providerMapbox') },
+            { value: 'maplibre-gl', label: t('admin.defaultSettings.providerMapLibre') },
           ] as const).map(opt => (
             <OptionButton
               key={opt.value}
-              active={(defaults.map_provider || 'leaflet') === opt.value}
-              onClick={() => save({ map_provider: opt.value })}
+              active={mapProvider === opt.value}
+              onClick={() => saveMapProvider(opt.value)}
             >
               {opt.label}
             </OptionButton>
           ))}
         </OptionRow>
 
-        {defaults.map_provider === 'mapbox-gl' && (
+        {mapProvider !== 'leaflet' && (
           <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {mapProvider === 'mapbox-gl' && (
             <div>
               <label className="block text-sm font-medium mb-1.5 text-content-secondary">
                 {t('admin.defaultSettings.mapboxToken')}
@@ -346,6 +374,7 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
               />
               <p className="text-xs mt-1 text-content-faint">{t('admin.defaultSettings.mapboxTokenHint')}</p>
             </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium mb-1.5 text-content-secondary">
@@ -356,7 +385,7 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
                 value={mapboxStyle}
                 onChange={(value: string) => { if (value) { setMapboxStyle(value); save({ mapbox_style: value }) } }}
                 placeholder={t('admin.defaultSettings.mapboxStylePlaceholder')}
-                options={MAPBOX_STYLE_PRESETS.map(p => ({ value: p.url, label: p.name }))}
+                options={glStylePresets.map(p => ({ value: p.url, label: p.name }))}
                 size="sm"
                 style={{ marginBottom: 8 }}
               />
@@ -364,12 +393,14 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
                 type="text"
                 value={mapboxStyle}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMapboxStyle(e.target.value)}
-                onBlur={() => save({ mapbox_style: mapboxStyle })}
-                placeholder="mapbox://styles/mapbox/standard"
+                onBlur={() => save({ mapbox_style: normalizeStyleForProvider(mapProvider, mapboxStyle) })}
+                placeholder={defaultStyleForProvider(mapProvider)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-slate-400 focus:border-transparent"
               />
             </div>
 
+            {mapProvider === 'mapbox-gl' && (
+            <>
             <OptionRow label={<>{t('admin.defaultSettings.mapbox3d')} <ResetButton field="mapbox_3d_enabled" /></>}>
               {([
                 { value: true, label: t('settings.on') || 'On' },
@@ -391,6 +422,8 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
                 </OptionButton>
               ))}
             </OptionRow>
+            </>
+            )}
           </div>
         )}
       </div>

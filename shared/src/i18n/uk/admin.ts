@@ -345,6 +345,7 @@ const admin: TranslationStrings = {
     'Карта за замовчуванням для всіх на цьому екземплярі. Кожен користувач може змінити її у власних налаштуваннях.',
   'admin.defaultSettings.providerLeaflet': 'Стандартна (безкоштовна)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Спільний токен Mapbox',
   'admin.defaultSettings.mapboxTokenHint':
     'Використовується для кожного користувача, який не ввів власний токен — щоб увесь екземпляр отримав Mapbox без потреби ділитися ключем окремо. Зберігається в зашифрованому вигляді.',

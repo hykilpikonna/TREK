@@ -20,6 +20,7 @@ const settings: TranslationStrings = {
   'settings.mapProviderHint': 'Affecte les cartes Trip Planner et Journey. Atlas utilise toujours Leaflet.',
   'settings.mapLeafletSubtitle': 'Classique 2D, toutes tuiles raster',
   'settings.mapMapboxSubtitle': 'Tuiles vectorielles, bâtiments 3D & terrain',
+  'settings.mapMapLibreSubtitle': 'OpenFreeMap vector tiles, no token',
   'settings.mapExperimental': 'Expérimental',
   'settings.mapMapboxToken': "Jeton d'accès Mapbox",
   'settings.mapMapboxTokenHint': 'Jeton public (pk.*) depuis',
@@ -27,6 +28,8 @@ const settings: TranslationStrings = {
   'settings.mapStyle': 'Style de carte',
   'settings.mapStylePlaceholder': 'Sélectionner un style Mapbox',
   'settings.mapStyleHint': 'Preset ou votre propre URL mapbox://styles/USER/ID',
+  'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': 'Bâtiments 3D & terrain',
   'settings.map3dHint':
     'Inclinaison + extrusions 3D réelles des bâtiments — fonctionne avec tous les styles, y compris satellite.',

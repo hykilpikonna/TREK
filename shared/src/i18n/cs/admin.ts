@@ -340,6 +340,7 @@ const admin: TranslationStrings = {
     'Výchozí mapa pro všechny uživatele na této instanci. Každý uživatel ji může i nadále změnit ve svém vlastním nastavení.',
   'admin.defaultSettings.providerLeaflet': 'Standardní (zdarma)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Sdílený token Mapbox',
   'admin.defaultSettings.mapboxTokenHint':
     'Použije se pro každého uživatele, který nezadal vlastní token — takže celá instance získá Mapbox, aniž byste klíč sdíleli s každým zvlášť. Ukládá se šifrovaně.',
