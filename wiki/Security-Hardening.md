@@ -7,7 +7,6 @@ A production TREK deployment checklist. All items reference actual TREK configur
 - [ ] Set a strong `ENCRYPTION_KEY` (generate with `openssl rand -hex 32`). See [Encryption-Key-Rotation](Encryption-Key-Rotation).
 - [ ] Back up `ENCRYPTION_KEY` separately from the database backup ZIP — losing it makes all stored API keys and secrets unreadable. Stored secrets use AES-256-GCM encryption derived from this key.
 - [ ] Rotate `ENCRYPTION_KEY` if it may have been exposed. See [Encryption-Key-Rotation](Encryption-Key-Rotation).
-- [ ] Do **not** set `JWT_SECRET` via environment variable. TREK auto-generates it on first start, persists it to `data/.jwt_secret`, and manages rotation through the Admin Panel. Setting it via env var would override any rotation performed through the UI on next restart.
 
 ## HTTPS & Network
 

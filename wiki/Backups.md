@@ -32,7 +32,7 @@ You can also download or delete any existing backup from the list.
 You can restore from:
 
 - **A stored backup** — click **Restore** next to any backup in the list.
-- **An uploaded ZIP** — click **Upload & Restore** and select a backup file from your computer (maximum upload size: 500 MB).
+- **An uploaded ZIP** — click **Upload & Restore** and select a backup file from your computer (maximum upload size: 500 MB by default, configurable with the `BACKUP_UPLOAD_LIMIT_MB` environment variable — see [Environment-Variables](Environment-Variables)).
 
 Before restoring, TREK runs integrity checks on the uploaded database:
 
