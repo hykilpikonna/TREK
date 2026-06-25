@@ -1376,16 +1376,56 @@ describe('getPlaceDetails (fetch stubbed)', () => {
     expect((result.place as any).open_now).toBe(false);
   });
 
-  it('MAPS-041g: getPlaceDetails rejects a Google place ID when no stored feature ID is available', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  it('MAPS-041g: getPlaceDetails falls back to official Places details for legacy Google place IDs', async () => {
+    mockDbGet
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({ maps_api_key: 'test-key' });
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => previewPlaceResponse(),
-    }));
-    const { getPlaceDetails } = await import('../../../src/services/mapsService');
-    await expect(getPlaceDetails(1, 'ChIJMissingFtid')).rejects.toMatchObject({
-      message: 'Google Maps feature ID not available for this place',
-      status: 404,
+      json: async () => ({
+        id: 'ChIJMissingFtid',
+        displayName: { text: 'Legacy Museum' },
+        formattedAddress: '100 Legacy Way',
+        location: { latitude: 43.6532, longitude: -79.3832 },
+        rating: 4.6,
+        userRatingCount: 123,
+        websiteUri: 'https://legacy.example',
+        nationalPhoneNumber: '+1 555 0100',
+        regularOpeningHours: {
+          weekdayDescriptions: [
+            'Monday: 10:00 AM - 6:00 PM',
+            'Tuesday: 10:00 AM - 6:00 PM',
+            'Wednesday: 10:00 AM - 6:00 PM',
+            'Thursday: 10:00 AM - 6:00 PM',
+            'Friday: 10:00 AM - 6:00 PM',
+            'Saturday: Closed',
+            'Sunday: Closed',
+          ],
+          openNow: true,
+          periods: [
+            { open: { day: 1, hour: 10, minute: 0 }, close: { day: 1, hour: 18, minute: 0 } },
+          ],
+        },
+        businessStatus: 'OPERATIONAL',
+        googleMapsUri: `https://www.google.com/maps?ftid=${ftid}`,
+      }),
     });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getPlaceDetails } = await import('../../../src/services/mapsService');
+    const result = await getPlaceDetails(1, 'ChIJMissingFtid');
+    const [detailsUrl, detailsInit] = fetchMock.mock.calls[0];
+
+    expect(String(detailsUrl)).toContain('places.googleapis.com/v1/places/ChIJMissingFtid');
+    expect((detailsInit as any).headers['X-Goog-Api-Key']).toBe('test-key');
+    expect((result.place as any).google_place_id).toBe('ChIJMissingFtid');
+    expect((result.place as any).google_ftid).toBe(ftid);
+    expect((result.place as any).opening_periods).toEqual([
+      { open: { day: 1, hour: 10, minute: 0 }, close: { day: 1, hour: 18, minute: 0 } },
+    ]);
+    expect((result.place as any).business_status).toBe('OPERATIONAL');
+    expect((result.place as any).cache_schema_version).toBe(3);
   });
 });
 

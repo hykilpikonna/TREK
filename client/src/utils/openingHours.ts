@@ -94,7 +94,7 @@ function intervalsFromPeriods(periods: OpeningPeriod[] | null | undefined, targe
       const start = (period.open.day - targetGoogleDay + weekOffset) * DAY_MINUTES + openMinute
       let end = (period.close.day - targetGoogleDay + weekOffset) * DAY_MINUTES + closeMinute
       while (end <= start) end += 7 * DAY_MINUTES
-      if (end > -DAY_MINUTES && start < 2 * DAY_MINUTES) intervals.push({ start, end })
+      if (end > 0 && start < DAY_MINUTES) intervals.push({ start, end })
     }
   }
 

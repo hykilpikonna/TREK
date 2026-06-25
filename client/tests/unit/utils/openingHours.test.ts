@@ -47,6 +47,21 @@ describe('openingHours warnings', () => {
     expect(warning).toBeNull()
   })
 
+  it('treats structured hours with no target-day interval as closed that day', () => {
+    const warning = getOpeningHoursWarning(
+      {
+        opening_periods: [
+          { open: { day: 1, hour: 10, minute: 0 }, close: { day: 1, hour: 18, minute: 0 } },
+        ],
+      },
+      '2025-06-08',
+      '11:00',
+      '12:00',
+    )
+
+    expect(warning).toEqual({ kind: 'closed_that_day' })
+  })
+
   it('warns for permanently closed places even without hours', () => {
     const warning = getOpeningHoursWarning(
       { business_status: 'CLOSED_PERMANENTLY' },

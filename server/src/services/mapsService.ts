@@ -60,7 +60,32 @@ interface GoogleAutocompleteSuggestion {
   };
 }
 
+interface GoogleOpeningPoint {
+  day?: number;
+  hour?: number;
+  minute?: number;
+}
+
+interface GoogleOpeningPeriod {
+  open?: GoogleOpeningPoint;
+  close?: GoogleOpeningPoint;
+}
+
+interface NormalizedGoogleOpeningPeriod {
+  open: { day: number; hour?: number; minute?: number };
+  close?: { day: number; hour?: number; minute?: number };
+}
+
 interface GooglePlaceDetails extends GooglePlaceResult {
+  userRatingCount?: number;
+  regularOpeningHours?: {
+    weekdayDescriptions?: string[];
+    openNow?: boolean;
+    periods?: GoogleOpeningPeriod[];
+  };
+  businessStatus?: string;
+  editorialSummary?: { text?: string };
+  reviews?: { authorAttribution?: { displayName?: string; photoUri?: string }; rating?: number; text?: { text?: string }; relativePublishTimeDescription?: string }[];
   photos?: { name: string; authorAttributions?: { displayName?: string }[] }[];
 }
 
@@ -133,14 +158,105 @@ function resolveGoogleFtid(placeId: string): string | null {
   }
 }
 
+function normalizeGoogleOpeningPoint(
+  point?: GoogleOpeningPoint,
+): { day: number; hour?: number; minute?: number } | null {
+  if (!point || !Number.isInteger(point.day) || point.day! < 0 || point.day! > 6) return null;
+  const normalized: { day: number; hour?: number; minute?: number } = { day: point.day! };
+  if (Number.isInteger(point.hour)) normalized.hour = point.hour;
+  if (Number.isInteger(point.minute)) normalized.minute = point.minute;
+  return normalized;
+}
+
+function normalizeGoogleOpeningPeriods(periods?: GoogleOpeningPeriod[]): NormalizedGoogleOpeningPeriod[] | null {
+  if (!Array.isArray(periods)) return null;
+  const normalized = periods
+    .map((period) => {
+      const open = normalizeGoogleOpeningPoint(period?.open);
+      if (!open) return null;
+      const close = normalizeGoogleOpeningPoint(period?.close);
+      return { open, ...(close ? { close } : {}) };
+    })
+    .filter((period): period is NormalizedGoogleOpeningPeriod => Boolean(period));
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeGooglePlacesApiDetails(
+  data: GooglePlaceDetails,
+  includeExpandedFields: boolean,
+): Record<string, unknown> {
+  return {
+    google_place_id: data.id,
+    google_ftid: googleFtidFromMapsUrl(data.googleMapsUri),
+    name: data.displayName?.text || '',
+    address: data.formattedAddress || '',
+    lat: data.location?.latitude || null,
+    lng: data.location?.longitude || null,
+    rating: data.rating || null,
+    rating_count: data.userRatingCount || null,
+    website: data.websiteUri || null,
+    phone: data.nationalPhoneNumber || null,
+    opening_hours: data.regularOpeningHours?.weekdayDescriptions || null,
+    opening_periods: normalizeGoogleOpeningPeriods(data.regularOpeningHours?.periods),
+    open_now: data.regularOpeningHours?.openNow ?? null,
+    business_status: data.businessStatus || null,
+    google_maps_url: data.googleMapsUri || null,
+    summary: includeExpandedFields ? data.editorialSummary?.text || null : null,
+    reviews: includeExpandedFields
+      ? (data.reviews || []).slice(0, 5).map((r: NonNullable<GooglePlaceDetails['reviews']>[number]) => ({
+        author: r.authorAttribution?.displayName || null,
+        rating: r.rating || null,
+        text: r.text?.text || null,
+        time: r.relativePublishTimeDescription || null,
+        photo: r.authorAttribution?.photoUri || null,
+      }))
+      : [],
+    source: 'google' as const,
+    cached_at: Date.now(),
+    cache_schema_version: DETAILS_CACHE_SCHEMA_VERSION,
+  };
+}
+
+async function fetchGooglePlacesApiDetails(
+  userId: number,
+  placeId: string,
+  langKey: string,
+  includeExpandedFields: boolean,
+): Promise<Record<string, unknown>> {
+  const apiKey = getMapsKey(userId);
+  if (!apiKey) {
+    throw Object.assign(new Error('Google Maps API key not configured'), { status: 400 });
+  }
+
+  const expandedFields = includeExpandedFields ? ',reviews,editorialSummary' : '';
+  const response = await googleFetch(`https://places.googleapis.com/v1/places/${placeId}?languageCode=${langKey}`, `getPlaceDetailsFallback(${placeId})`, {
+    method: 'GET',
+    headers: {
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': `id,displayName,formattedAddress,location,rating,userRatingCount,websiteUri,nationalPhoneNumber,regularOpeningHours,businessStatus,googleMapsUri${expandedFields}`,
+    },
+  });
+
+  const data = await response.json() as GooglePlaceDetails & { error?: { message?: string } };
+
+  if (!response.ok) {
+    const err = new Error(data.error?.message || 'Google Places API error') as Error & { status: number };
+    err.status = response.status;
+    throw err;
+  }
+
+  return normalizeGooglePlacesApiDetails(data, includeExpandedFields);
+}
+
 async function fetchGooglePreviewDetailsPlace(
+  userId: number,
   placeId: string,
   langKey: string,
   includeExpandedFields: boolean,
 ): Promise<Record<string, unknown>> {
   const ftid = resolveGoogleFtid(placeId);
   if (!ftid && /^ChIJ/i.test(placeId)) {
-    throw Object.assign(new Error('Google Maps feature ID not available for this place'), { status: 404 });
+    return fetchGooglePlacesApiDetails(userId, placeId, langKey, includeExpandedFields);
   }
 
   const place = await fetchGoogleMapsPreviewPlaceDetails({
@@ -793,7 +909,7 @@ async function autocompleteNominatim(
 
 // ── Place details (Google or OSM) ────────────────────────────────────────────
 
-export async function getPlaceDetails(_userId: number, placeId: string, lang?: string): Promise<{ place: Record<string, unknown> }> {
+export async function getPlaceDetails(userId: number, placeId: string, lang?: string): Promise<{ place: Record<string, unknown> }> {
   // OSM details: placeId is "node:123456" or "way:123456" etc.
   if (isOsmPlaceId(placeId)) {
     const [osmType, osmId] = placeId.split(':');
@@ -829,13 +945,13 @@ export async function getPlaceDetails(_userId: number, placeId: string, lang?: s
   const cachedPlace = freshCachedPlace(cached);
   if (cachedPlace) return { place: cachedPlace };
 
-  const place = await fetchGooglePreviewDetailsPlace(placeId, langKey, false);
+  const place = await fetchGooglePreviewDetailsPlace(userId, placeId, langKey, false);
   cachePlaceDetails(placeId, langKey, 0, place);
 
   return { place };
 }
 
-export async function getPlaceDetailsExpanded(_userId: number, placeId: string, lang?: string, refresh = false): Promise<{ place: Record<string, unknown> }> {
+export async function getPlaceDetailsExpanded(userId: number, placeId: string, lang?: string, refresh = false): Promise<{ place: Record<string, unknown> }> {
   const langKey = toApiLang(lang, 'de');
 
   // Check DB cache for expanded result
@@ -847,7 +963,7 @@ export async function getPlaceDetailsExpanded(_userId: number, placeId: string, 
     if (cachedPlace) return { place: cachedPlace };
   }
 
-  const place = await fetchGooglePreviewDetailsPlace(placeId, langKey, true);
+  const place = await fetchGooglePreviewDetailsPlace(userId, placeId, langKey, true);
   cachePlaceDetails(placeId, langKey, 1, place);
 
   return { place };
