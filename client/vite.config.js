@@ -64,6 +64,18 @@ export default defineConfig({
             },
           },
           {
+            // OpenFreeMap MapLibre style, glyphs, sprites and vector tiles.
+            // Same best-effort offline model as Mapbox GL: viewed resources are
+            // reused from cache, but the vector tile pipeline is not prefetched.
+            urlPattern: /^https:\/\/tiles\.openfreemap\.org\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'openfreemap-tiles',
+              expiration: { maxEntries: 3000, maxAgeSeconds: 30 * 24 * 60 * 60 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
             // API calls — network only. We deliberately do NOT cache API
             // responses in the Service Worker: Workbox keys entries by URL and
             // cannot vary on the httpOnly session cookie, so a shared device

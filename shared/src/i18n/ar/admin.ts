@@ -335,6 +335,7 @@ const admin: TranslationStrings = {
     'الخريطة الافتراضية لجميع المستخدمين على هذا الخادم. لا يزال بإمكان كل مستخدم تجاوزها في إعداداته الخاصة.',
   'admin.defaultSettings.providerLeaflet': 'قياسي (مجاني)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (ثلاثي الأبعاد)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'رمز Mapbox المشترك',
   'admin.defaultSettings.mapboxTokenHint':
     'يُستخدم لكل مستخدم لم يُدخل رمزه الخاص — حتى يحصل الخادم بأكمله على Mapbox دون مشاركة المفتاح بشكل فردي. يُخزَّن مشفّرًا.',

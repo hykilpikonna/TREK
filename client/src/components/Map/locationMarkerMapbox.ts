@@ -1,5 +1,12 @@
-import mapboxgl from 'mapbox-gl'
+import type mapboxgl from 'mapbox-gl'
 import type { GeoPosition } from '../../hooks/useGeolocation'
+
+type MarkerConstructor = new (options?: { element?: HTMLElement; anchor?: string }) => {
+  setLngLat: (lngLat: mapboxgl.LngLatLike) => { addTo: (map: mapboxgl.Map) => unknown }
+  addTo: (map: mapboxgl.Map) => unknown
+  remove: () => void
+  getElement: () => HTMLElement
+}
 
 // Build the DOM element that backs the mapbox Marker. We animate the
 // heading cone via a CSS rotation so the DOM stays stable across updates
@@ -66,10 +73,10 @@ export interface LocationMarkerHandle {
 // mapbox map. Returns a handle the caller uses to push position updates
 // and clean up. Keeps its own DOM element and GeoJSON source so it can
 // coexist with the regular trip markers.
-export function attachLocationMarker(map: mapboxgl.Map): LocationMarkerHandle {
+export function attachLocationMarker(map: mapboxgl.Map, MarkerCtor: MarkerConstructor): LocationMarkerHandle {
   ensurePulseStyle()
   const { root, cone } = buildLocationEl()
-  const marker = new mapboxgl.Marker({ element: root, anchor: 'center' })
+  const marker = new MarkerCtor({ element: root, anchor: 'center' })
 
   const ensureAccuracyLayer = () => {
     if (map.getSource('trek-location-accuracy')) return
