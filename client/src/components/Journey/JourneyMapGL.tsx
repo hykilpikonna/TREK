@@ -1,8 +1,11 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
+import maplibregl from 'maplibre-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { useSettingsStore } from '../../store/settingsStore'
 import { isStandardFamily, supportsCustom3d, wantsTerrain, addCustom3dBuildings, addTerrainAndSky } from '../Map/mapboxSetup'
+import { MAPBOX_DEFAULT_STYLE, styleForActiveProvider, type GlMapProvider } from '../Map/glProviders'
 
 export interface JourneyMapGLHandle {
   highlightMarker: (id: string | null) => void
@@ -32,6 +35,7 @@ interface Props {
   onMarkerClick?: (id: string, type?: string) => void
   fullScreen?: boolean
   paddingBottom?: number
+  glProvider?: GlMapProvider
 }
 
 interface Item {
@@ -95,8 +99,10 @@ function ensureJourneyPopupStyle() {
   const s = document.createElement('style')
   s.id = 'trek-journey-popup-style'
   s.textContent = `
-    .mapboxgl-popup.trek-journey-popup { pointer-events: none; animation: trek-journey-popup-in 180ms ease-out; }
-    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-content {
+    .mapboxgl-popup.trek-journey-popup,
+    .maplibregl-popup.trek-journey-popup { pointer-events: none; animation: trek-journey-popup-in 180ms ease-out; }
+    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-content,
+    .maplibregl-popup.trek-journey-popup .maplibregl-popup-content {
       padding: 9px 14px 10px;
       border-radius: 14px;
       background: rgba(255, 255, 255, 0.94);
@@ -108,20 +114,24 @@ function ensureJourneyPopupStyle() {
       min-width: 160px;
       max-width: 280px;
     }
-    .mapboxgl-popup.trek-journey-popup.trek-dark .mapboxgl-popup-content {
+    .mapboxgl-popup.trek-journey-popup.trek-dark .mapboxgl-popup-content,
+    .maplibregl-popup.trek-journey-popup.trek-dark .maplibregl-popup-content {
       background: rgba(24, 24, 27, 0.88);
       border-color: rgba(255, 255, 255, 0.08);
       color: #FAFAFA;
     }
-    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-tip {
+    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-tip,
+    .maplibregl-popup.trek-journey-popup .maplibregl-popup-tip {
       border-top-color: rgba(255, 255, 255, 0.94);
       border-bottom-color: rgba(255, 255, 255, 0.94);
     }
-    .mapboxgl-popup.trek-journey-popup.trek-dark .mapboxgl-popup-tip {
+    .mapboxgl-popup.trek-journey-popup.trek-dark .mapboxgl-popup-tip,
+    .maplibregl-popup.trek-journey-popup.trek-dark .maplibregl-popup-tip {
       border-top-color: rgba(24, 24, 27, 0.88);
       border-bottom-color: rgba(24, 24, 27, 0.88);
     }
-    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-close-button { display: none; }
+    .mapboxgl-popup.trek-journey-popup .mapboxgl-popup-close-button,
+    .maplibregl-popup.trek-journey-popup .maplibregl-popup-close-button { display: none; }
     .trek-journey-popup-title {
       font-size: 13.5px;
       font-weight: 600;
@@ -132,7 +142,8 @@ function ensureJourneyPopupStyle() {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .mapboxgl-popup.trek-journey-popup.trek-dark .trek-journey-popup-title { color: #FAFAFA; }
+    .mapboxgl-popup.trek-journey-popup.trek-dark .trek-journey-popup-title,
+    .maplibregl-popup.trek-journey-popup.trek-dark .trek-journey-popup-title { color: #FAFAFA; }
     .trek-journey-popup-sub {
       display: flex;
       align-items: baseline;
@@ -143,7 +154,8 @@ function ensureJourneyPopupStyle() {
       line-height: 1.35;
       white-space: nowrap;
     }
-    .mapboxgl-popup.trek-journey-popup.trek-dark .trek-journey-popup-sub { color: #A1A1AA; }
+    .mapboxgl-popup.trek-journey-popup.trek-dark .trek-journey-popup-sub,
+    .maplibregl-popup.trek-journey-popup.trek-dark .trek-journey-popup-sub { color: #A1A1AA; }
     .trek-journey-popup-place {
       min-width: 0;
       overflow: hidden;
@@ -194,20 +206,28 @@ function markerHtml(dayColor: string, dayLabel: number, highlighted: boolean): H
 const EMPTY_TRAIL: { lat: number; lng: number }[] = []
 
 const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL(
-  { entries, trail, height = 220, dark, activeMarkerId, onMarkerClick, fullScreen, paddingBottom },
+  { entries, trail, height = 220, dark, activeMarkerId, onMarkerClick, fullScreen, paddingBottom, glProvider = 'mapbox-gl' },
   ref
 ) {
   const stableTrail = trail || EMPTY_TRAIL
-  const mapboxStyle = useSettingsStore(s => s.settings.mapbox_style || 'mapbox://styles/mapbox/standard')
+  const rawMapboxStyle = useSettingsStore(s => s.settings.mapbox_style || MAPBOX_DEFAULT_STYLE)
+  const rawMaplibreStyle = useSettingsStore(s => s.settings.maplibre_style || '')
   const mapboxToken = useSettingsStore(s => s.settings.mapbox_access_token || '')
   const mapbox3d = useSettingsStore(s => s.settings.mapbox_3d_enabled !== false)
   const mapboxQuality = useSettingsStore(s => s.settings.mapbox_quality_mode === true)
+  const isMapLibre = glProvider === 'maplibre-gl'
+  const gl = (isMapLibre ? maplibregl : mapboxgl) as any
+  const glStyle = styleForActiveProvider(glProvider, rawMapboxStyle, rawMaplibreStyle)
+  const enableMapbox3d = !isMapLibre && mapbox3d
   const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<mapboxgl.Map | null>(null)
-  const markersRef = useRef<Map<string, mapboxgl.Marker>>(new Map())
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapRef = useRef<any | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markersRef = useRef<Map<string, any>>(new Map())
   const itemsRef = useRef<Item[]>([])
   const highlightedRef = useRef<string | null>(null)
-  const popupRef = useRef<mapboxgl.Popup | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const popupRef = useRef<any | null>(null)
   const onMarkerClickRef = useRef(onMarkerClick)
   onMarkerClickRef.current = onMarkerClick
   const darkRef = useRef(dark)
@@ -247,7 +267,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       const el = popupRef.current.getElement()
       if (el) el.classList.toggle('trek-dark', !!darkRef.current)
     } else {
-      popupRef.current = new mapboxgl.Popup({
+      popupRef.current = new gl.Popup({
         closeButton: false,
         closeOnClick: false,
         closeOnMove: false,
@@ -260,7 +280,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
         .setHTML(html)
         .addTo(mapRef.current)
     }
-  }, [])
+  }, [gl])
 
   const hidePopup = useCallback(() => {
     if (popupRef.current) {
@@ -305,11 +325,11 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       mapRef.current.flyTo({
         center: marker.getLngLat(),
         zoom: Math.max(mapRef.current.getZoom(), 14),
-        pitch: mapbox3d ? 45 : 0,
+        pitch: enableMapbox3d ? 45 : 0,
         duration: 600,
       })
     } catch { /* map not yet ready */ }
-  }, [highlightMarker, mapbox3d])
+  }, [highlightMarker, enableMapbox3d])
 
   const invalidateSize = useCallback(() => {
     try { mapRef.current?.resize() } catch { /* map not yet ready */ }
@@ -320,37 +340,39 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
   // Build map once per style/token change. Markers and layers are rebuilt
   // inside the same effect so they stay in sync with the active style.
   useEffect(() => {
-    if (!containerRef.current || !mapboxToken) return
-    mapboxgl.accessToken = mapboxToken
+    if (!containerRef.current || (!isMapLibre && !mapboxToken)) return
+    if (!isMapLibre) mapboxgl.accessToken = mapboxToken
 
     const items = buildItems(entries)
     itemsRef.current = items
 
-    const bounds = new mapboxgl.LngLatBounds()
+    const bounds = new gl.LngLatBounds()
     items.forEach(i => bounds.extend([i.lng, i.lat]))
     stableTrail.forEach(p => bounds.extend([p.lng, p.lat]))
     const hasPoints = items.length > 0 || stableTrail.length > 0
 
-    const map = new mapboxgl.Map({
+    const mapOptions: Record<string, unknown> = {
       container: containerRef.current,
-      style: mapboxStyle,
+      style: glStyle,
       center: hasPoints ? bounds.getCenter() : [0, 30],
       zoom: hasPoints ? 2 : 1,
-      pitch: mapbox3d && fullScreen ? 45 : 0,
+      pitch: enableMapbox3d && fullScreen ? 45 : 0,
       attributionControl: true,
       antialias: mapboxQuality,
-      projection: mapboxQuality ? 'globe' : 'mercator',
-    })
+    }
+    if (!isMapLibre) mapOptions.projection = mapboxQuality ? 'globe' : 'mercator'
+
+    const map = new gl.Map(mapOptions as any)
     mapRef.current = map
 
     map.on('load', () => {
-      if (mapbox3d) {
-        if (!isStandardFamily(mapboxStyle) && wantsTerrain(mapboxStyle)) addTerrainAndSky(map)
-        if (supportsCustom3d(mapboxStyle)) addCustom3dBuildings(map, !!darkRef.current)
+      if (enableMapbox3d) {
+        if (!isStandardFamily(glStyle) && wantsTerrain(glStyle)) addTerrainAndSky(map)
+        if (supportsCustom3d(glStyle)) addCustom3dBuildings(map, !!darkRef.current)
       }
       // Flatten Mapbox Standard's built-in DEM so HTML markers (at Z=0)
       // stay pinned to their coordinates at every zoom and pitch.
-      if (mapboxStyle === 'mapbox://styles/mapbox/standard') {
+      if (glStyle === MAPBOX_DEFAULT_STYLE) {
         try { map.setTerrain(null) } catch { /* noop */ }
       }
 
@@ -383,7 +405,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       // markers
       items.forEach((item) => {
         const el = markerHtml(item.dayColor, item.dayLabel, false)
-        const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        const marker = new gl.Marker({ element: el, anchor: 'bottom' })
           .setLngLat([item.lng, item.lat])
           .addTo(map)
         el.addEventListener('click', (ev) => {
@@ -400,7 +422,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
           map.fitBounds(bounds, {
             padding: { top: 50, bottom: pb, left: 50, right: 50 },
             maxZoom: 16,
-            pitch: mapbox3d && fullScreen ? 45 : 0,
+            pitch: enableMapbox3d && fullScreen ? 45 : 0,
             duration: 0,
           })
         } catch { /* empty bounds */ }
@@ -418,7 +440,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       try { map.remove() } catch { /* noop */ }
       mapRef.current = null
     }
-  }, [entries, stableTrail, mapboxStyle, mapboxToken, mapbox3d, mapboxQuality, fullScreen, paddingBottom])
+  }, [entries, stableTrail, glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality, fullScreen, paddingBottom])
 
   // external activeMarkerId → highlight + flyTo
   useEffect(() => {
@@ -431,15 +453,15 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
         mapRef.current.flyTo({
           center: marker.getLngLat(),
           zoom: Math.max(mapRef.current.getZoom(), 12),
-          pitch: mapbox3d && fullScreen ? 45 : 0,
+          pitch: enableMapbox3d && fullScreen ? 45 : 0,
           duration: 500,
         })
       } catch { /* map not ready */ }
     }, 50)
     return () => clearTimeout(t)
-  }, [activeMarkerId, highlightMarker, mapbox3d, fullScreen])
+  }, [activeMarkerId, highlightMarker, enableMapbox3d, fullScreen])
 
-  if (!mapboxToken) {
+  if (!isMapLibre && !mapboxToken) {
     return (
       <div
         style={{ position: 'relative', height: height === 9999 ? '100%' : height, width: '100%', borderRadius: 'inherit', overflow: 'hidden' }}

@@ -1,14 +1,22 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Map, Save, Layers, Box, ChevronDown, Check } from 'lucide-react'
+import { Map, Save, Layers, Box, ChevronDown, Check, Globe2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useToast } from '../shared/Toast'
 import CustomSelect from '../shared/CustomSelect'
 import { MapView } from '../Map/MapView'
-import MapboxPreview from './MapboxPreview'
+import GlMapPreview from './MapboxPreview'
 import Section from './Section'
 import ToggleSwitch from './ToggleSwitch'
 import type { Place } from '../../types'
+import {
+  MAPBOX_DEFAULT_STYLE,
+  defaultStyleForProvider,
+  getStylePresets,
+  isOpenFreeMapStyle,
+  normalizeStyleForProvider,
+  type GlMapProvider,
+} from '../Map/glProviders'
 
 interface MapPreset {
   name: string
@@ -21,25 +29,6 @@ const MAP_PRESETS: MapPreset[] = [
   { name: 'CartoDB Light', url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' },
   { name: 'CartoDB Dark', url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' },
   { name: 'Stadia Smooth', url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png' },
-]
-
-interface StylePreset {
-  name: string
-  url: string
-  tags: string[]
-}
-
-const MAPBOX_STYLE_PRESETS: StylePreset[] = [
-  { name: 'Mapbox Standard',          url: 'mapbox://styles/mapbox/standard',            tags: ['3D', 'Apple-like'] },
-  { name: 'Standard Satellite',       url: 'mapbox://styles/mapbox/standard-satellite',  tags: ['3D', 'Satellite'] },
-  { name: 'Streets',                  url: 'mapbox://styles/mapbox/streets-v12',         tags: ['3D', 'Classic'] },
-  { name: 'Outdoors',                 url: 'mapbox://styles/mapbox/outdoors-v12',        tags: ['3D', 'Terrain'] },
-  { name: 'Light',                    url: 'mapbox://styles/mapbox/light-v11',           tags: ['3D', 'Minimal'] },
-  { name: 'Dark',                     url: 'mapbox://styles/mapbox/dark-v11',            tags: ['3D', 'Dark'] },
-  { name: 'Satellite',                url: 'mapbox://styles/mapbox/satellite-v9',        tags: ['3D', 'Satellite'] },
-  { name: 'Satellite Streets',        url: 'mapbox://styles/mapbox/satellite-streets-v12', tags: ['3D', 'Satellite'] },
-  { name: 'Navigation Day',           url: 'mapbox://styles/mapbox/navigation-day-v1',   tags: ['3D', 'Apple-like'] },
-  { name: 'Navigation Night',         url: 'mapbox://styles/mapbox/navigation-night-v1', tags: ['3D', 'Dark'] },
 ]
 
 // Tag → chip color mapping. Keeps the dropdown readable at a glance so a
@@ -59,6 +48,7 @@ const TAG_STYLES: Record<string, string> = {
   'Classic': 'bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300',
   'Hybrid': 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300',
   'No labels': 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
+  'OpenFreeMap': 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
 }
 
 function TagChip({ tag }: { tag: string }) {
@@ -70,10 +60,11 @@ function TagChip({ tag }: { tag: string }) {
   )
 }
 
-function StyleDropdown({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function StyleDropdown({ value, provider, onChange }: { value: string; provider: GlMapProvider; onChange: (v: string) => void }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const presets = getStylePresets(provider)
 
   useEffect(() => {
     if (!open) return
@@ -84,7 +75,10 @@ function StyleDropdown({ value, onChange }: { value: string; onChange: (v: strin
     return () => document.removeEventListener('mousedown', onDoc)
   }, [open])
 
-  const selected = MAPBOX_STYLE_PRESETS.find(p => p.url === value)
+  const selected = presets.find(p => p.url === value)
+  const placeholder = provider === 'maplibre-gl'
+    ? t('settings.mapOpenFreeMapStylePlaceholder')
+    : t('settings.mapStylePlaceholder')
 
   return (
     <div ref={ref} className="relative">
@@ -95,11 +89,11 @@ function StyleDropdown({ value, onChange }: { value: string; onChange: (v: strin
       >
         <span className="flex items-center gap-2 min-w-0">
           <span className="text-slate-900 dark:text-white truncate">
-            {selected ? selected.name : t('settings.mapStylePlaceholder')}
+            {selected ? selected.name : placeholder}
           </span>
           {selected && (
             <span className="flex items-center gap-1 flex-shrink-0">
-              {selected.tags.map(t => <TagChip key={t} tag={t} />)}
+              {(selected.tags || []).map(t => <TagChip key={t} tag={t} />)}
             </span>
           )}
         </span>
@@ -107,7 +101,7 @@ function StyleDropdown({ value, onChange }: { value: string; onChange: (v: strin
       </button>
       {open && (
         <div className="absolute z-20 mt-1 w-full max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1">
-          {MAPBOX_STYLE_PRESETS.map(preset => {
+          {presets.map(preset => {
             const isActive = preset.url === value
             return (
               <button
@@ -118,7 +112,7 @@ function StyleDropdown({ value, onChange }: { value: string; onChange: (v: strin
               >
                 <span className="flex items-center gap-2 flex-wrap">
                   <span className="text-slate-900 dark:text-white font-medium">{preset.name}</span>
-                  {preset.tags.map(t => <TagChip key={t} tag={t} />)}
+                  {(preset.tags || []).map(t => <TagChip key={t} tag={t} />)}
                 </span>
                 {isActive && <Check size={14} className="flex-shrink-0 text-slate-900 dark:text-white" />}
               </button>
@@ -130,17 +124,34 @@ function StyleDropdown({ value, onChange }: { value: string; onChange: (v: strin
   )
 }
 
-type Provider = 'leaflet' | 'mapbox-gl'
+type Provider = 'leaflet' | GlMapProvider
+
+function normalizeProvider(value: unknown): Provider {
+  return value === 'mapbox-gl' || value === 'maplibre-gl' ? value : 'leaflet'
+}
+
+function styleForProvider(provider: Provider, style?: string | null): string {
+  if (provider === 'leaflet') return style || MAPBOX_DEFAULT_STYLE
+  if (provider === 'mapbox-gl' && isOpenFreeMapStyle(style)) return MAPBOX_DEFAULT_STYLE
+  return normalizeStyleForProvider(provider, style)
+}
+
+// Each GL provider has its own style slot, so toggling providers never clobbers the
+// other one's style. Leaflet/Mapbox use mapbox_style; MapLibre uses maplibre_style.
+function slotStyle(provider: Provider, s: { mapbox_style?: string; maplibre_style?: string }): string | undefined {
+  return provider === 'maplibre-gl' ? s.maplibre_style : s.mapbox_style
+}
 
 export default function MapSettingsTab(): React.ReactElement {
   const { settings, updateSettings } = useSettingsStore()
   const { t } = useTranslation()
   const toast = useToast()
+  const initialProvider = normalizeProvider(settings.map_provider)
   const [saving, setSaving] = useState(false)
-  const [provider, setProvider] = useState<Provider>((settings.map_provider as Provider) || 'leaflet')
+  const [provider, setProvider] = useState<Provider>(initialProvider)
   const [mapTileUrl, setMapTileUrl] = useState<string>(settings.map_tile_url || '')
   const [mapboxToken, setMapboxToken] = useState<string>(settings.mapbox_access_token || '')
-  const [mapboxStyle, setMapboxStyle] = useState<string>(settings.mapbox_style || 'mapbox://styles/mapbox/standard')
+  const [mapboxStyle, setMapboxStyle] = useState<string>(styleForProvider(initialProvider, slotStyle(initialProvider, settings)))
   const [mapbox3d, setMapbox3d] = useState<boolean>(settings.mapbox_3d_enabled !== false)
   const [mapboxQuality, setMapboxQuality] = useState<boolean>(settings.mapbox_quality_mode === true)
   const [defaultLat, setDefaultLat] = useState<number | string>(settings.default_lat || 48.8566)
@@ -148,10 +159,11 @@ export default function MapSettingsTab(): React.ReactElement {
   const [defaultZoom, setDefaultZoom] = useState<number | string>(settings.default_zoom || 10)
 
   useEffect(() => {
-    setProvider((settings.map_provider as Provider) || 'leaflet')
+    const nextProvider = normalizeProvider(settings.map_provider)
+    setProvider(nextProvider)
     setMapTileUrl(settings.map_tile_url || '')
     setMapboxToken(settings.mapbox_access_token || '')
-    setMapboxStyle(settings.mapbox_style || 'mapbox://styles/mapbox/standard')
+    setMapboxStyle(styleForProvider(nextProvider, slotStyle(nextProvider, settings)))
     setMapbox3d(settings.mapbox_3d_enabled !== false)
     setMapboxQuality(settings.mapbox_quality_mode === true)
     setDefaultLat(settings.default_lat || 48.8566)
@@ -186,11 +198,15 @@ export default function MapSettingsTab(): React.ReactElement {
   const saveMapSettings = async (): Promise<void> => {
     setSaving(true)
     try {
+      const glStyle = provider === 'leaflet' ? mapboxStyle : normalizeStyleForProvider(provider, mapboxStyle)
+      setMapboxStyle(glStyle)
+      // Save into the active provider's own slot so the other provider's style survives.
+      const stylePatch = provider === 'maplibre-gl' ? { maplibre_style: glStyle } : { mapbox_style: glStyle }
       await updateSettings({
         map_provider: provider,
         map_tile_url: mapTileUrl,
         mapbox_access_token: mapboxToken,
-        mapbox_style: mapboxStyle,
+        ...stylePatch,
         mapbox_3d_enabled: mapbox3d,
         mapbox_quality_mode: mapboxQuality,
         default_lat: parseFloat(String(defaultLat)),
@@ -208,16 +224,20 @@ export default function MapSettingsTab(): React.ReactElement {
   // 3D is available on every style now — pure satellite uses the
   // mapbox-streets-v8 tileset as a fallback building source.
   const supports3d = true
+  const changeProvider = (nextProvider: Provider) => {
+    setProvider(nextProvider)
+    if (nextProvider !== 'leaflet') setMapboxStyle(styleForProvider(nextProvider, mapboxStyle))
+  }
 
   return (
     <Section title={t('settings.map')} icon={Map}>
       {/* Provider picker — big cards so the choice is obvious */}
       <div>
         <label className="block text-sm font-medium text-slate-700 mb-2">{t('settings.mapProvider')}</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <button
             type="button"
-            onClick={() => setProvider('leaflet')}
+            onClick={() => changeProvider('leaflet')}
             className={`flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
               provider === 'leaflet'
                 ? 'border-slate-900 bg-slate-50 dark:bg-slate-800 dark:border-slate-200'
@@ -232,7 +252,7 @@ export default function MapSettingsTab(): React.ReactElement {
           </button>
           <button
             type="button"
-            onClick={() => setProvider('mapbox-gl')}
+            onClick={() => changeProvider('mapbox-gl')}
             className={`relative flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
               provider === 'mapbox-gl'
                 ? 'border-slate-900 bg-slate-50 dark:bg-slate-800 dark:border-slate-200'
@@ -251,6 +271,24 @@ export default function MapSettingsTab(): React.ReactElement {
             <span className="hidden sm:inline-block absolute top-2 right-2 text-[9px] font-semibold tracking-wide uppercase px-1.5 py-[3px] rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 leading-none">
               {t('settings.mapExperimental')}
             </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => changeProvider('maplibre-gl')}
+            className={`relative flex items-start gap-3 p-3 rounded-lg border text-left transition-colors ${
+              provider === 'maplibre-gl'
+                ? 'border-slate-900 bg-slate-50 dark:bg-slate-800 dark:border-slate-200'
+                : 'border-slate-200 hover:border-slate-400 dark:border-slate-700'
+            }`}
+          >
+            <Globe2 size={18} className="mt-0.5 flex-shrink-0 text-slate-700 dark:text-slate-300" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-slate-900 dark:text-white">
+                <span className="sm:hidden">MapLibre</span>
+                <span className="hidden sm:inline">MapLibre GL</span>
+              </div>
+              <div className="hidden sm:block text-xs text-slate-500 mt-0.5">{t('settings.mapMapLibreSubtitle')}</div>
+            </div>
           </button>
         </div>
         <p className="text-xs text-slate-400 mt-2">
@@ -281,9 +319,10 @@ export default function MapSettingsTab(): React.ReactElement {
         </div>
       )}
 
-      {/* Mapbox GL settings */}
-      {provider === 'mapbox-gl' && (
+      {/* GL settings */}
+      {provider !== 'leaflet' && (
         <div className="space-y-3">
+          {provider === 'mapbox-gl' && (
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('settings.mapMapboxToken')}</label>
             <input
@@ -300,24 +339,27 @@ export default function MapSettingsTab(): React.ReactElement {
               </a>
             </p>
           </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">{t('settings.mapStyle')}</label>
             <div className="mb-2">
-              <StyleDropdown value={mapboxStyle} onChange={setMapboxStyle} />
+              <StyleDropdown value={mapboxStyle} provider={provider} onChange={setMapboxStyle} />
             </div>
             <input
               type="text"
               value={mapboxStyle}
               onChange={(e) => setMapboxStyle(e.target.value)}
-              placeholder="mapbox://styles/mapbox/standard"
+              placeholder={defaultStyleForProvider(provider)}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-slate-400 focus:border-transparent"
             />
             <p className="text-xs text-slate-400 mt-1">
-              {t('settings.mapStyleHint')}
+              {provider === 'maplibre-gl' ? t('settings.mapOpenFreeMapStyleHint') : t('settings.mapStyleHint')}
             </p>
           </div>
 
+          {provider === 'mapbox-gl' && (
+          <>
           <div className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
             supports3d
               ? 'border-slate-200 dark:border-slate-700'
@@ -354,6 +396,8 @@ export default function MapSettingsTab(): React.ReactElement {
           <div className="text-xs text-slate-400 p-3 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
             <strong className="text-slate-600 dark:text-slate-300">{t('settings.mapTipLabel')}</strong> {t('settings.mapTip')}
           </div>
+          </>
+          )}
         </div>
       )}
 
@@ -383,8 +427,9 @@ export default function MapSettingsTab(): React.ReactElement {
 
       <div>
         <div style={{ position: 'relative', inset: 0, height: '200px', width: '100%' }}>
-          {provider === 'mapbox-gl' ? (
-            <MapboxPreview
+          {provider !== 'leaflet' ? (
+            <GlMapPreview
+              provider={provider}
               token={mapboxToken}
               style={mapboxStyle}
               lat={parseFloat(String(defaultLat)) || 48.8566}
@@ -392,8 +437,8 @@ export default function MapSettingsTab(): React.ReactElement {
               // Zoom in close so the style's character (3D buildings,
               // satellite texture, label density) is immediately visible.
               zoom={Math.max(parseInt(String(defaultZoom)) || 10, 16)}
-              enable3d={mapbox3d && supports3d}
-              quality={mapboxQuality}
+              enable3d={provider === 'mapbox-gl' && mapbox3d && supports3d}
+              quality={provider === 'mapbox-gl' && mapboxQuality}
               onClick={(ll) => { setDefaultLat(ll.lat); setDefaultLng(ll.lng) }}
             />
           ) : (

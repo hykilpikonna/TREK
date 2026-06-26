@@ -331,6 +331,7 @@ const admin: TranslationStrings = {
     'このインスタンスの全員に適用される既定の地図です。各ユーザーは自分の設定でこれを上書きできます。',
   'admin.defaultSettings.providerLeaflet': '標準（無料）',
   'admin.defaultSettings.providerMapbox': 'Mapbox（3D）',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': '共有 Mapbox トークン',
   'admin.defaultSettings.mapboxTokenHint':
     '自分のトークンを入力していないすべてのユーザーに使用されます。これにより、キーを個別に共有しなくてもインスタンス全体で Mapbox を利用できます。暗号化して保存されます。',

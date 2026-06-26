@@ -1,10 +1,14 @@
 import { useEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
+import maplibregl from 'maplibre-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { isStandardFamily, supportsCustom3d, addCustom3dBuildings, addTerrainAndSky } from '../Map/mapboxSetup'
+import { MAPBOX_DEFAULT_STYLE, normalizeStyleForProvider, type GlMapProvider } from '../Map/glProviders'
 
 interface Props {
-  token: string
+  provider?: GlMapProvider
+  token?: string
   style: string
   lat: number
   lng: number
@@ -14,37 +18,44 @@ interface Props {
   onClick?: (latlng: { lat: number; lng: number }) => void
 }
 
-export default function MapboxPreview({ token, style, lat, lng, zoom, enable3d, quality = false, onClick }: Props) {
+export default function GlMapPreview({ provider = 'mapbox-gl', token = '', style, lat, lng, zoom, enable3d, quality = false, onClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<mapboxgl.Map | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapRef = useRef<any | null>(null)
   const onClickRef = useRef(onClick)
   onClickRef.current = onClick
+  const isMapLibre = provider === 'maplibre-gl'
+  const gl = (isMapLibre ? maplibregl : mapboxgl) as any
+  const glStyle = normalizeStyleForProvider(provider, style)
+  const enableMapbox3d = !isMapLibre && enable3d
 
   useEffect(() => {
-    if (!containerRef.current || !token) return
-    mapboxgl.accessToken = token
+    if (!containerRef.current || (!isMapLibre && !token)) return
+    if (!isMapLibre) mapboxgl.accessToken = token
 
-    const map = new mapboxgl.Map({
+    const mapOptions: Record<string, unknown> = {
       container: containerRef.current,
-      style,
+      style: glStyle,
       center: [lng, lat],
       zoom,
-      pitch: enable3d ? 45 : 0,
+      pitch: enableMapbox3d ? 45 : 0,
       attributionControl: true,
       antialias: quality,
-      projection: quality ? 'globe' : 'mercator',
-    })
+    }
+    if (!isMapLibre) mapOptions.projection = quality ? 'globe' : 'mercator'
+
+    const map = new gl.Map(mapOptions as any)
     mapRef.current = map
 
     map.on('load', () => {
-      if (enable3d) {
-        if (!isStandardFamily(style)) addTerrainAndSky(map)
-        if (supportsCustom3d(style)) {
+      if (enableMapbox3d) {
+        if (!isStandardFamily(glStyle)) addTerrainAndSky(map)
+        if (supportsCustom3d(glStyle)) {
           const dark = document.documentElement.classList.contains('dark')
           addCustom3dBuildings(map, dark)
         }
       }
-      if (style === 'mapbox://styles/mapbox/standard') {
+      if (glStyle === MAPBOX_DEFAULT_STYLE) {
         try { map.setTerrain(null) } catch { /* noop */ }
       }
     })
@@ -57,7 +68,7 @@ export default function MapboxPreview({ token, style, lat, lng, zoom, enable3d, 
       try { map.remove() } catch { /* noop */ }
       mapRef.current = null
     }
-  }, [token, style, enable3d, quality])
+  }, [provider, token, glStyle, enableMapbox3d, quality])
 
   // Recenter without rebuilding the map when lat/lng/zoom change externally
   useEffect(() => {
@@ -65,7 +76,7 @@ export default function MapboxPreview({ token, style, lat, lng, zoom, enable3d, 
     try { mapRef.current.jumpTo({ center: [lng, lat], zoom }) } catch { /* noop */ }
   }, [lat, lng, zoom])
 
-  if (!token) {
+  if (!isMapLibre && !token) {
     return (
       <div className="flex items-center justify-center h-full bg-slate-100 dark:bg-slate-800 text-xs text-slate-500 rounded-lg border border-slate-200 dark:border-slate-700">
         Enter a Mapbox access token to preview
