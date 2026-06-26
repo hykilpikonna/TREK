@@ -184,6 +184,7 @@ const admin: TranslationStrings = {
     'Standardkartan för alla användare på denna instans. Varje användare kan fortfarande ändra inställningarna i sina egna inställningar.',
   'admin.defaultSettings.providerLeaflet': 'Standard (gratis)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Delat Mapbox-token',
   'admin.defaultSettings.mapboxTokenHint':
     'Används för alla användare som inte har angett sin egen token – på så sätt får hela instansen tillgång till Mapbox utan att nyckeln behöver delas ut individuellt. Lagras i krypterad form.',

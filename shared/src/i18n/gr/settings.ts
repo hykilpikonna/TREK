@@ -21,6 +21,7 @@ const settings: TranslationStrings = {
     'Επηρεάζει τους χάρτες του Trip Planner και του Journey. Το Atlas χρησιμοποιεί πάντα Leaflet.',
   'settings.mapLeafletSubtitle': 'Κλασικό 2D, οποιαδήποτε raster πλακίδια',
   'settings.mapMapboxSubtitle': 'Διανυσματικά πλακίδια, 3D κτίρια & ανάγλυφο',
+  'settings.mapMapLibreSubtitle': 'Διανυσματικά πλακίδια OpenFreeMap, χωρίς token',
   'settings.mapExperimental': 'Πειραματικό',
   'settings.mapMapboxToken': 'Mapbox Access Token',
   'settings.mapMapboxTokenHint': 'Δημόσιο token (pk.*) από',
@@ -28,6 +29,8 @@ const settings: TranslationStrings = {
   'settings.mapStyle': 'Στυλ Χάρτη',
   'settings.mapStylePlaceholder': 'Επιλέξτε ένα στυλ Mapbox',
   'settings.mapStyleHint': 'Προκαθορισμένο ή δικό σας mapbox://styles/USER/ID URL',
+  'settings.mapOpenFreeMapStylePlaceholder': 'Επιλέξτε ένα στυλ OpenFreeMap',
+  'settings.mapOpenFreeMapStyleHint': 'Προκαθορισμένο ή URL στυλ OpenFreeMap. Τα στυλ OpenFreeMap λειτουργούν χωρίς token.',
   'settings.map3dBuildings': '3D Κτίρια & Ανάγλυφο',
   'settings.map3dHint':
     'Κλίση + πραγματικές 3D προεξοχές κτιρίων — λειτουργεί σε κάθε στυλ, συμπεριλαμβανομένου του δορυφορικού.',

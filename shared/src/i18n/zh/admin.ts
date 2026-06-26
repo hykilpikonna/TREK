@@ -325,6 +325,7 @@ const admin: TranslationStrings = {
   'admin.defaultSettings.mapProviderHint': '本实例中所有用户的默认地图。每位用户仍可在自己的设置中更改此项。',
   'admin.defaultSettings.providerLeaflet': '标准（免费）',
   'admin.defaultSettings.providerMapbox': 'Mapbox（3D）',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': '共享 Mapbox 令牌',
   'admin.defaultSettings.mapboxTokenHint':
     '用于所有未输入自己令牌的用户 — 这样无需逐个分享密钥，整个实例即可使用 Mapbox。以加密方式存储。',

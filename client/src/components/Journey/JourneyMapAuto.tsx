@@ -1,7 +1,11 @@
-import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { forwardRef, lazy, Suspense, useImperativeHandle, useRef } from 'react'
 import { useSettingsStore } from '../../store/settingsStore'
 import JourneyMap, { type JourneyMapHandle } from './JourneyMap'
-import JourneyMapGL, { type JourneyMapGLHandle } from './JourneyMapGL'
+import type { JourneyMapGLHandle } from './JourneyMapGL'
+
+// Lazy-load the GL renderer (and its ~230 KB gzip engine) so Leaflet-only
+// installs never download it — it ships only once a GL provider is picked.
+const JourneyMapGL = lazy(() => import('./JourneyMapGL'))
 
 // Unified handle — both providers expose the same three methods.
 export type JourneyMapAutoHandle = JourneyMapHandle
@@ -37,8 +41,9 @@ const JourneyMapAuto = forwardRef<JourneyMapAutoHandle, Props>(function JourneyM
   const glRef = useRef<JourneyMapGLHandle>(null)
 
   // Fall back to Leaflet when the user selected Mapbox GL but hasn't
-  // supplied a token yet — otherwise the map would just show a stub.
-  const useGL = provider === 'mapbox-gl' && !!token
+  // supplied a token yet. MapLibre/OpenFreeMap is tokenless.
+  const useGL = provider === 'maplibre-gl' || (provider === 'mapbox-gl' && !!token)
+  const glProvider = provider === 'maplibre-gl' ? 'maplibre-gl' : 'mapbox-gl'
 
   useImperativeHandle(ref, () => ({
     highlightMarker: (id) => (useGL ? glRef.current : leafletRef.current)?.highlightMarker(id),
@@ -47,8 +52,12 @@ const JourneyMapAuto = forwardRef<JourneyMapAutoHandle, Props>(function JourneyM
   }), [useGL])
 
   if (useGL) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return <JourneyMapGL ref={glRef} {...(props as any)} />
+    return (
+      <Suspense fallback={null}>
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        <JourneyMapGL ref={glRef} {...(props as any)} glProvider={glProvider} />
+      </Suspense>
+    )
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return <JourneyMap ref={leafletRef} {...(props as any)} />
