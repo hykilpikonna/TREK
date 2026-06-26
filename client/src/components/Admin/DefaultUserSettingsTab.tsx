@@ -393,7 +393,11 @@ export default function DefaultUserSettingsTab(): React.ReactElement {
                 type="text"
                 value={mapboxStyle}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMapboxStyle(e.target.value)}
-                onBlur={() => save({ mapbox_style: normalizeStyleForProvider(mapProvider, mapboxStyle) })}
+                onBlur={() => {
+                  const nextStyle = normalizeStyleForProvider(mapProvider, mapboxStyle)
+                  setMapboxStyle(nextStyle)
+                  save({ mapbox_style: nextStyle })
+                }}
                 placeholder={defaultStyleForProvider(mapProvider)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-slate-400 focus:border-transparent"
               />

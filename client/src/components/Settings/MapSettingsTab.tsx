@@ -193,6 +193,7 @@ export default function MapSettingsTab(): React.ReactElement {
     setSaving(true)
     try {
       const glStyle = provider === 'leaflet' ? mapboxStyle : normalizeStyleForProvider(provider, mapboxStyle)
+      setMapboxStyle(glStyle)
       await updateSettings({
         map_provider: provider,
         map_tile_url: mapTileUrl,

@@ -27,7 +27,7 @@ const settings: TranslationStrings = {
   'settings.mapStylePlaceholder': 'اختر نمط Mapbox',
   'settings.mapStyleHint': 'إعداد مسبق أو عنوان URL mapbox://styles/USER/ID خاص بك',
   'settings.mapOpenFreeMapStylePlaceholder': 'Select an OpenFreeMap style',
-  'settings.mapOpenFreeMapStyleHint': 'Preset or any MapLibre style JSON URL. OpenFreeMap styles work without a token.',
+  'settings.mapOpenFreeMapStyleHint': 'Preset or OpenFreeMap style URL. OpenFreeMap styles work without a token.',
   'settings.map3dBuildings': 'مبانٍ ثلاثية الأبعاد وتضاريس',
   'settings.map3dHint': 'إمالة + مبانٍ ثلاثية الأبعاد حقيقية — يعمل مع كل نمط بما في ذلك الأقمار الصناعية.',
   'settings.mapHighQuality': 'وضع الجودة العالية',
