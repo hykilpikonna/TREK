@@ -5,7 +5,7 @@ declare global { interface Window { __dragData: DragDataPayload | null } }
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Trash2, Car, Lock, Hotel, Footprints, Route as RouteIcon, CalendarDays, List, Train } from 'lucide-react'
 import { mapsApi, reservationsApi } from '../../api/client'
-import { calculateRoute, calculateRouteWithLegs, optimizeRoute, generateGoogleMapsUrl, type RouteProfile, type RoutingProvider } from '../Map/RouteCalculator'
+import { calculateRoute, calculateRouteWithLegs, optimizeRoute, generateGoogleMapsUrl, setRouteAlternativeChoice, type RouteProfile, type RoutingProvider } from '../Map/RouteCalculator'
 import PlaceAvatar from '../shared/PlaceAvatar'
 import ConfirmDialog from '../shared/ConfirmDialog'
 import { useContextMenu, ContextMenu } from '../shared/ContextMenu'
@@ -350,12 +350,14 @@ function makeRouteDetailsSelection({
   profile,
   seg,
   labels,
+  onAlternativeSelect,
 }: {
   key: string
   day: Day
   profile: PlannerRouteProfile
   seg: RouteSegment
   labels: RouteEndpointLabels
+  onAlternativeSelect?: (index: number) => void
 }): PlannerRouteDetailsSelection {
   return {
     key,
@@ -366,6 +368,26 @@ function makeRouteDetailsSelection({
     toLabel: labels.toLabel,
     dayTitle: day.title || day.date || null,
     segment: seg,
+    onAlternativeSelect,
+  }
+}
+
+function routeSegmentWithAlternative(seg: RouteSegment, index: number): RouteSegment | null {
+  const alternative = seg.alternatives?.[index]
+  if (!alternative) return null
+  return {
+    ...seg,
+    distance: alternative.distance,
+    duration: alternative.duration,
+    walkingText: alternative.walkingText,
+    drivingText: alternative.drivingText,
+    distanceText: alternative.distanceText,
+    durationText: alternative.durationText,
+    tollText: alternative.tollText,
+    fareText: alternative.fareText,
+    steps: alternative.steps,
+    coordinates: alternative.coordinates,
+    routeAlternativeIndex: alternative.index,
   }
 }
 
@@ -494,6 +516,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
   const [routeInfo, setRouteInfo] = useState(null)
   const [dayRouteLegs, setDayRouteLegs] = useState<Record<number, Record<number, RouteSegment>>>({})
   const [dayHotelLegs, setDayHotelLegs] = useState<Record<number, DayHotelRouteLegs>>({})
+  const [routeChoiceVersion, setRouteChoiceVersion] = useState(0)
   const [localSelectedRouteKey, setLocalSelectedRouteKey] = useState<string | null>(null)
   const activeSelectedRouteKey = selectedRouteKey ?? localSelectedRouteKey
   const selectRouteDetails = (selection: PlannerRouteDetailsSelection | null) => {
@@ -906,7 +929,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
       }
     })
     return () => controller.abort()
-  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes])
+  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes, routeChoiceVersion])
 
   const openAddNote = (dayId, e) => {
     e?.stopPropagation()
@@ -1373,7 +1396,10 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     routeInfo,
     setRouteInfo,
     dayRouteLegs,
+    setDayRouteLegs,
     dayHotelLegs,
+    setDayHotelLegs,
+    setRouteChoiceVersion,
     activeSelectedRouteKey,
     selectRouteDetails,
     legsAbortRef,
@@ -1532,7 +1558,10 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
     routeInfo,
     setRouteInfo,
     dayRouteLegs,
+    setDayRouteLegs,
     dayHotelLegs,
+    setDayHotelLegs,
+    setRouteChoiceVersion,
     activeSelectedRouteKey,
     selectRouteDetails,
     legsAbortRef,
@@ -1685,14 +1714,31 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           const renderedRouteLegs = dayRouteLegs[day.id] || {}
           const renderedHotelLegs = dayHotelLegs[day.id] || {}
           const routeEndpointLabels = buildRouteEndpointLabels(merged, day.id)
-          const routeDetailsFor = (id: string | number, seg: RouteSegment, fallbackFrom: string, fallbackTo = 'Next stop') =>
-            makeRouteDetailsSelection({
-              key: routeSelectionKey(day.id, id),
+          const routeDetailsFor = (id: string | number, seg: RouteSegment, fallbackFrom: string, fallbackTo = 'Next stop') => {
+            const key = routeSelectionKey(day.id, id)
+            const labels = routeEndpointLabels.byId[Number(id)] || { fromLabel: fallbackFrom, toLabel: fallbackTo }
+            return makeRouteDetailsSelection({
+              key,
               day,
               profile: routeProfile,
               seg,
-              labels: routeEndpointLabels.byId[Number(id)] || { fromLabel: fallbackFrom, toLabel: fallbackTo },
+              labels,
+              onAlternativeSelect: (index) => {
+                const nextSeg = routeSegmentWithAlternative(seg, index)
+                if (!nextSeg) return
+                if (nextSeg.routeChoiceKey) setRouteAlternativeChoice(nextSeg.routeChoiceKey, index)
+                setDayRouteLegs(prev => ({
+                  ...prev,
+                  [day.id]: {
+                    ...(prev[day.id] || {}),
+                    [Number(id)]: nextSeg,
+                  },
+                }))
+                setRouteChoiceVersion(v => v + 1)
+                selectRouteDetails(routeDetailsFor(id, nextSeg, fallbackFrom, fallbackTo))
+              },
             })
+          }
           const hotelRouteDetailsFor = (placement: 'top' | 'bottom', seg: RouteSegment, hotelName: string) => {
             const labels = placement === 'top'
               ? { fromLabel: hotelName, toLabel: routeEndpointLabels.firstLabel || 'First stop' }
@@ -1703,6 +1749,20 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
               profile: routeProfile,
               seg,
               labels,
+              onAlternativeSelect: (index) => {
+                const nextSeg = routeSegmentWithAlternative(seg, index)
+                if (!nextSeg) return
+                if (nextSeg.routeChoiceKey) setRouteAlternativeChoice(nextSeg.routeChoiceKey, index)
+                setDayHotelLegs(prev => ({
+                  ...prev,
+                  [day.id]: {
+                    ...(prev[day.id] || {}),
+                    [placement]: { seg: nextSeg, name: hotelName },
+                  },
+                }))
+                setRouteChoiceVersion(v => v + 1)
+                selectRouteDetails(hotelRouteDetailsFor(placement, nextSeg, hotelName))
+              },
             })
           }
           const scheduleMarginMinutes = Math.max(0, Math.round(Number(trip?.schedule_margin_minutes) || 0))

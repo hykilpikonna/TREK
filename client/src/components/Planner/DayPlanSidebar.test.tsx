@@ -61,6 +61,7 @@ vi.mock('../Map/RouteCalculator', () => ({
   }),
   generateGoogleMapsUrl: vi.fn().mockReturnValue('https://maps.google.com/...'),
   optimizeRoute: vi.fn().mockImplementation((places) => places),
+  setRouteAlternativeChoice: vi.fn(),
 }))
 
 // PlaceAvatar needs IntersectionObserver
