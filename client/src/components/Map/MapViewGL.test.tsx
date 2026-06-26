@@ -58,6 +58,35 @@ vi.mock('mapbox-gl', () => ({
 }))
 vi.mock('mapbox-gl/dist/mapbox-gl.css', () => ({}))
 
+vi.mock('maplibre-gl', () => ({
+  default: {
+    Map: vi.fn(function () {
+      return glMap
+    }),
+    Marker: vi.fn(function () {
+      return {
+        setLngLat: vi.fn().mockReturnThis(),
+        addTo: vi.fn().mockReturnThis(),
+        remove: vi.fn(),
+        getElement: vi.fn(() => document.createElement('div')),
+      }
+    }),
+    LngLatBounds: vi.fn(function () {
+      return { extend: vi.fn().mockReturnThis() }
+    }),
+    NavigationControl: vi.fn(),
+    Popup: vi.fn(function () {
+      return {
+        setLngLat: vi.fn().mockReturnThis(),
+        setHTML: vi.fn().mockReturnThis(),
+        addTo: vi.fn().mockReturnThis(),
+        remove: vi.fn(),
+      }
+    }),
+  },
+}))
+vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}))
+
 vi.mock('./mapboxSetup', () => ({
   isStandardFamily: vi.fn(() => false),
   supportsCustom3d: vi.fn(() => false),

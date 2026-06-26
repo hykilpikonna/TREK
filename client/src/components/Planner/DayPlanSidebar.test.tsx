@@ -9,6 +9,7 @@ import {
   buildUser, buildTrip, buildDay, buildPlace, buildCategory, buildAssignment, buildDayNote, buildReservation,
 } from '../../../tests/helpers/factories'
 import DayPlanSidebar from './DayPlanSidebar'
+import { mapsApi } from '../../api/client'
 
 // ── Hoisted mock state (accessible in vi.mock factories) ────────────────────
 const mockDayNotesState = vi.hoisted(() => ({
@@ -38,6 +39,10 @@ vi.mock('../../api/client', async (importOriginal) => {
     reservationsApi: {
       list: vi.fn().mockResolvedValue({ reservations: [] }),
       updatePositions: vi.fn().mockResolvedValue({}),
+    },
+    mapsApi: {
+      ...actual.mapsApi,
+      details: vi.fn().mockResolvedValue({ place: null }),
     },
   }
 })
@@ -244,6 +249,29 @@ describe('DayPlanSidebar', () => {
     expect(screen.getByText('Louvre Museum')).toBeInTheDocument()
   })
 
+  it('FE-PLANNER-DAYPLAN-011b: warns when a scheduled place is outside opening hours', async () => {
+    vi.mocked(mapsApi.details).mockResolvedValueOnce({
+      place: {
+        opening_periods: [
+          { open: { day: 1, hour: 10, minute: 0 }, close: { day: 1, hour: 18, minute: 0 } },
+        ],
+      },
+    } as any)
+    const place = buildPlace({
+      id: 42,
+      name: 'Late Museum',
+      google_place_id: 'google-place-42',
+      google_ftid: '0x882bf179e806d471:0x8591dde29c821a93',
+    })
+    const day = buildDay({ id: 10, date: '2025-06-02', title: 'Monday' })
+    const assignment = buildAssignment({ id: 99, day_id: 10, order_index: 0, place, duration_minutes: 60 })
+
+    render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [place], assignments: { '10': [assignment] } })} />)
+
+    await waitFor(() => expect(mapsApi.details).toHaveBeenCalledWith('0x882bf179e806d471:0x8591dde29c821a93', expect.any(String)))
+    await waitFor(() => expect(screen.getByText(/Outside opening hours/i)).toBeInTheDocument())
+  })
+
   it('FE-PLANNER-DAYPLAN-012: assigned place uses calculated time and ignores legacy place_time', () => {
     const place = buildPlace({ name: 'Louvre Museum', place_time: '10:00' })
     const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
@@ -311,6 +339,38 @@ describe('DayPlanSidebar', () => {
     const lunchTile = screen.getByTestId('calendar-activity-22') as HTMLElement
     expect(screen.getByTestId('day-calendar-grid-10')).toHaveStyle('background: transparent')
     expect(parseFloat(lunchTile.style.height)).toBeGreaterThan(parseFloat(museumTile.style.height))
+  })
+
+  it('FE-PLANNER-DAYPLAN-012d2: calendar tile keeps its category edge after selection changes', async () => {
+    const user = userEvent.setup()
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1', wake_up_time: '08:00' })
+    const category = buildCategory({ id: 5, name: 'Museums', color: '#10b981' })
+    const museum = buildPlace({ id: 1, name: 'Museum', category_id: 5 })
+    const assignment = buildAssignment({ id: 11, day_id: 10, order_index: 0, place: museum, duration_minutes: 60 })
+    const props = makeDefaultProps({
+      days: [day],
+      places: [museum],
+      categories: [category],
+      assignments: { '10': [assignment] },
+    })
+
+    const { rerender } = render(<DayPlanSidebar {...props} />)
+    await user.click(screen.getByRole('button', { name: 'Calendar' }))
+
+    const tile = screen.getByTestId('calendar-activity-11') as HTMLElement
+    const expectCategoryEdge = () => {
+      expect(tile).toHaveStyle({
+        borderLeftWidth: '4px',
+        borderLeftStyle: 'solid',
+        borderLeftColor: '#10b981',
+      })
+    }
+
+    expectCategoryEdge()
+    rerender(<DayPlanSidebar {...props} selectedPlaceId={1} selectedAssignmentId={11} />)
+    expectCategoryEdge()
+    rerender(<DayPlanSidebar {...props} selectedPlaceId={null} selectedAssignmentId={null} />)
+    expectCategoryEdge()
   })
 
   it('FE-PLANNER-DAYPLAN-012e: dragging a calendar tile reorders assignments', async () => {

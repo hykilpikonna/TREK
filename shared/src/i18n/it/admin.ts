@@ -346,6 +346,7 @@ const admin: TranslationStrings = {
     'La mappa predefinita per tutti gli utenti di questa istanza. Ogni utente può comunque sostituirla nelle proprie impostazioni.',
   'admin.defaultSettings.providerLeaflet': 'Standard (gratuito)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Token Mapbox condiviso',
   'admin.defaultSettings.mapboxTokenHint':
     "Usato per ogni utente che non ha inserito un proprio token — così tutta l'istanza ottiene Mapbox senza dover condividere la chiave individualmente. Archiviato in forma crittografata.",

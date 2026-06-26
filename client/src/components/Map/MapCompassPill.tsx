@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react'
 import { Navigation } from 'lucide-react'
-import type mapboxgl from 'mapbox-gl'
+
+export interface CompassMap {
+  getBearing: () => number
+  on: (type: 'rotate', listener: () => void) => unknown
+  off: (type: 'rotate', listener: () => void) => unknown
+  easeTo: (options: { bearing: number; pitch: number; duration: number }) => unknown
+}
 
 /**
- * Round compass pill for the Mapbox planner map. The Mapbox map can be rotated and
+ * Round compass pill for the GL planner map. The map can be rotated and
  * pitched, so this shows the current bearing (the arrow points to north) and snaps
  * the camera back to north + flat on click. Rendered next to the POI "explore" pill
- * (Mapbox only) and built as the SAME frosted shell (padding 4 around a 34px button)
+ * (GL only) and built as the SAME frosted shell (padding 4 around a 34px button)
  * so its height and transparency match the POI pill exactly.
  */
-export function MapCompassPill({ map }: { map: mapboxgl.Map }) {
+export function MapCompassPill({ map }: { map: CompassMap }) {
   const [bearing, setBearing] = useState(() => map.getBearing())
 
   useEffect(() => {

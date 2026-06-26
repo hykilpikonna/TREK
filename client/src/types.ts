@@ -115,7 +115,7 @@ export interface Settings {
   map_booking_labels?: boolean
   map_poi_pill_enabled?: boolean
   optimize_from_accommodation?: boolean
-  map_provider?: 'leaflet' | 'mapbox-gl'
+  map_provider?: 'leaflet' | 'mapbox-gl' | 'maplibre-gl'
   mapbox_access_token?: string
   mapbox_style?: string
   mapbox_3d_enabled?: boolean
