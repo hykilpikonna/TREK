@@ -345,6 +345,7 @@ const admin: TranslationStrings = {
     'Die Standardkarte für alle auf dieser Instanz. Jeder Nutzer kann sie weiterhin in den eigenen Einstellungen überschreiben.',
   'admin.defaultSettings.providerLeaflet': 'Standard (kostenlos)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Gemeinsames Mapbox-Token',
   'admin.defaultSettings.mapboxTokenHint':
     'Wird für jeden Nutzer verwendet, der kein eigenes Token eingegeben hat — so erhält die gesamte Instanz Mapbox, ohne den Schlüssel einzeln teilen zu müssen. Verschlüsselt gespeichert.',

@@ -350,6 +350,7 @@ const admin: TranslationStrings = {
     'Domyślna mapa dla wszystkich na tej instancji. Każdy użytkownik może ją zmienić we własnych ustawieniach.',
   'admin.defaultSettings.providerLeaflet': 'Standardowa (bezpłatna)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Współdzielony token Mapbox',
   'admin.defaultSettings.mapboxTokenHint':
     'Używany dla każdego użytkownika, który nie wprowadził własnego tokena — dzięki temu cała instancja korzysta z Mapbox bez udostępniania klucza każdemu z osobna. Przechowywany w postaci zaszyfrowanej.',

@@ -348,6 +348,7 @@ const admin: TranslationStrings = {
     'La carte par défaut pour tous les utilisateurs de cette instance. Chaque utilisateur peut toujours la remplacer dans ses propres paramètres.',
   'admin.defaultSettings.providerLeaflet': 'Standard (gratuit)',
   'admin.defaultSettings.providerMapbox': 'Mapbox (3D)',
+  'admin.defaultSettings.providerMapLibre': 'MapLibre (OpenFreeMap)',
   'admin.defaultSettings.mapboxToken': 'Jeton Mapbox partagé',
   'admin.defaultSettings.mapboxTokenHint':
     "Utilisé pour chaque utilisateur n'ayant pas saisi son propre jeton — ainsi toute l'instance bénéficie de Mapbox sans partager la clé individuellement. Stocké de façon chiffrée.",

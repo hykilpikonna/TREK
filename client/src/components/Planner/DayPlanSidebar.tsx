@@ -2141,6 +2141,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                             const isPlaceSelected = selectedAssignmentId ? assignment.id === selectedAssignmentId : place.id === selectedPlaceId
                             const isDraggingThis = draggingId === assignment.id
                             const color = cat?.color || 'var(--accent)'
+                            const calendarBorder = `1px solid ${isPlaceSelected ? 'color-mix(in srgb, var(--accent) 16%, var(--border-faint))' : 'var(--border-faint)'}`
                             const displayEnd = durationMinutes === slot.durationMinutes
                               ? slot.end
                               : minutesToClock((parseTimeToMinutes(slot.start) ?? 0) + durationMinutes)
@@ -2184,7 +2185,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                   right: 8,
                                   height: heightPx,
                                   borderRadius: 7,
-                                  border: `1px solid ${openingWarning ? 'rgba(245, 158, 11, 0.45)' : isPlaceSelected ? 'color-mix(in srgb, var(--accent) 16%, var(--border-faint))' : 'var(--border-faint)'}`,
+                                  borderTop: openingWarning ? '1px solid rgba(245, 158, 11, 0.45)' : calendarBorder,
+                                  borderRight: openingWarning ? '1px solid rgba(245, 158, 11, 0.45)' : calendarBorder,
+                                  borderBottom: openingWarning ? '1px solid rgba(245, 158, 11, 0.45)' : calendarBorder,
                                   borderLeft: `4px solid ${color}`,
                                   background: openingWarning
                                     ? 'color-mix(in srgb, #f59e0b 7%, var(--bg-card))'

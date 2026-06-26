@@ -8,7 +8,7 @@
 
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import mapboxgl from 'mapbox-gl'
+import type mapboxgl from 'mapbox-gl'
 import { Plane, Train, Ship, Car, Bus, Sailboat, Bike, CarTaxiFront, Route } from 'lucide-react'
 import { escapeHtml } from '@trek/shared'
 import type { Reservation, ReservationEndpoint } from '../../types'
@@ -220,18 +220,29 @@ export interface ReservationOverlayOptions {
   onEndpointClick?: (reservationId: number) => void
 }
 
+type GlMarker = {
+  setLngLat: (lngLat: mapboxgl.LngLatLike) => GlMarker
+  addTo: (map: mapboxgl.Map) => GlMarker
+  remove: () => void
+  getElement: () => HTMLElement
+}
+
+type MarkerConstructor = new (options?: { element?: HTMLElement; anchor?: string }) => GlMarker
+
 export class ReservationMapboxOverlay {
   private map: mapboxgl.Map
   private items: TransportItem[] = []
   private opts: ReservationOverlayOptions
-  private endpointMarkers: mapboxgl.Marker[] = []
-  private statsMarkers: { marker: mapboxgl.Marker; arc: [number, number][] }[] = []
+  private MarkerCtor: MarkerConstructor
+  private endpointMarkers: GlMarker[] = []
+  private statsMarkers: { marker: GlMarker; arc: [number, number][] }[] = []
   private rerender: () => void
   private destroyed = false
 
-  constructor(map: mapboxgl.Map, opts: ReservationOverlayOptions) {
+  constructor(map: mapboxgl.Map, opts: ReservationOverlayOptions, MarkerCtor: MarkerConstructor) {
     this.map = map
     this.opts = opts
+    this.MarkerCtor = MarkerCtor
     this.rerender = () => { if (!this.destroyed) this.render() }
     this.setupLayer()
     map.on('zoomend', this.rerender)
@@ -350,7 +361,7 @@ export class ReservationMapboxOverlay {
               this.opts.onEndpointClick?.(item.res.id)
             })
           }
-          const marker = new mapboxgl.Marker({ element: node, anchor: 'center' })
+          const marker = new this.MarkerCtor({ element: node, anchor: 'center' })
             .setLngLat([ep.lng, ep.lat])
             .addTo(map)
           this.endpointMarkers.push(marker)
