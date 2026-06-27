@@ -9,7 +9,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 import { mapsApi } from '../../api/client'
 import { getCategoryIcon, CATEGORY_ICON_MAP, isEmojiCategoryIcon } from '../shared/categoryIcons'
 import ReservationOverlay from './ReservationOverlay'
-import type { Reservation } from '../../types'
+import type { Reservation, RouteSegment } from '../../types'
 import { POI_CATEGORY_BY_KEY, type Poi } from './poiCategories'
 
 function categoryIconSvg(iconName: string | null | undefined, size: number): string {
@@ -245,6 +245,41 @@ function BoundsController({ places, fitKey, paddingOpts, hasDayDetail }: BoundsC
   return null
 }
 
+function routeSegmentFitPoints(segment: RouteSegment | null | undefined): [number, number][] {
+  return buildDisplayRouteLineSegments(null, segment ? [segment] : [])
+    .flatMap(line => line.coordinates)
+    .filter((point): point is [number, number] => Number.isFinite(point?.[0]) && Number.isFinite(point?.[1]))
+}
+
+function RouteFocusController({
+  segment,
+  focusKey,
+  paddingOpts,
+}: {
+  segment?: RouteSegment | null
+  focusKey?: string | null
+  paddingOpts: L.FitBoundsOptions
+}) {
+  const map = useMap()
+  const points = useMemo(() => routeSegmentFitPoints(segment), [segment])
+  const pointKey = useMemo(
+    () => points.map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`).join('|'),
+    [points],
+  )
+  const effectiveFocusKey = focusKey && pointKey ? `${focusKey}:${pointKey}` : null
+
+  useEffect(() => {
+    if (!effectiveFocusKey) return
+    if (points.length < 2) return
+    try {
+      const bounds = L.latLngBounds(points)
+      if (bounds.isValid()) map.fitBounds(bounds, { ...paddingOpts, maxZoom: 16, animate: true })
+    } catch {}
+  }, [effectiveFocusKey, points, paddingOpts, map])
+
+  return null
+}
+
 interface MapClickHandlerProps {
   onClick: ((e: L.LeafletMouseEvent) => void) | null
 }
@@ -286,6 +321,7 @@ import { getCached, isLoading, fetchPhoto, onThumbReady, getAllThumbs } from '..
 import { useAuthStore } from '../../store/authStore'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import LocationButton from './LocationButton'
+import { buildDisplayRouteLineSegments, buildRouteTransferPoints } from './routeLineSegments'
 
 // Live-location rendering inside the Leaflet map. Subscribes via the
 // shared useGeolocation hook so the Leaflet and Mapbox variants behave
@@ -392,6 +428,8 @@ export const MapView = memo(function MapView({
   dayPlaces = [],
   route = null,
   routeSegments = [],
+  focusedRouteSegment = null,
+  focusedRouteKey = null,
   selectedPlaceId = null,
   onMarkerClick,
   onMapClick,
@@ -565,6 +603,15 @@ export const MapView = memo(function MapView({
     } catch { return [] }
   }), [places])
 
+  const routeLineSegments = useMemo(
+    () => buildDisplayRouteLineSegments(route, routeSegments),
+    [route, routeSegments],
+  )
+  const routeTransferPoints = useMemo(
+    () => buildRouteTransferPoints(route, routeSegments),
+    [route, routeSegments],
+  )
+
   const TooltipOverlay = hoveredPlace && tooltipPos && !isTouchDevice
   const CatIcon = TooltipOverlay ? getCategoryIcon(hoveredPlace.category_icon) : null
   const catEmoji = TooltipOverlay && isEmojiCategoryIcon(hoveredPlace.category_icon) ? hoveredPlace.category_icon : null
@@ -597,6 +644,7 @@ export const MapView = memo(function MapView({
 
       <MapController center={center} zoom={zoom} />
       <BoundsController places={dayPlaces.length > 0 ? dayPlaces : places} fitKey={fitKey} paddingOpts={paddingOpts} hasDayDetail={hasDayDetail} />
+      <RouteFocusController segment={focusedRouteSegment} focusKey={focusedRouteKey} paddingOpts={paddingOpts} />
       <SelectionController places={places} selectedPlaceId={selectedPlaceId} dayPlaces={dayPlaces} paddingOpts={paddingOpts} />
       <MapClickHandler onClick={onMapClick} />
       <MapContextMenuHandler onContextMenu={onMapContextMenu} />
@@ -618,19 +666,28 @@ export const MapView = memo(function MapView({
         {markers}
       </MarkerClusterGroup>
 
-      {/* Apple-Maps style: darker-blue casing under a bright-blue core, rounded. */}
-      {route && route.length > 0 && route.flatMap((seg, i) => seg.length > 1 ? [
+      {/* Apple-Maps style: darker casing under a bright core, rounded. */}
+      {routeLineSegments.flatMap((seg, i) => seg.coordinates.length > 1 ? [
         <Polyline
           key={`${i}-casing`}
-          positions={seg}
-          pathOptions={{ color: '#0a5cc2', weight: 8, opacity: 1, lineCap: 'round', lineJoin: 'round' }}
+          positions={seg.coordinates}
+          pathOptions={{ color: seg.casingColor || '#0a5cc2', weight: 8, opacity: 1, lineCap: 'round', lineJoin: 'round' }}
         />,
         <Polyline
           key={`${i}-core`}
-          positions={seg}
-          pathOptions={{ color: '#0a84ff', weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }}
+          positions={seg.coordinates}
+          pathOptions={{ color: seg.color || '#0a84ff', weight: 5, opacity: 1, lineCap: 'round', lineJoin: 'round' }}
         />,
       ] : [])}
+      {routeTransferPoints.map((point, index) => (
+        <CircleMarker
+          key={`route-transfer-${index}`}
+          center={point.position}
+          radius={5}
+          pathOptions={{ color: '#ffffff', weight: 2.5, opacity: 1, fillColor: point.color || '#0a84ff', fillOpacity: 1 }}
+          interactive={false}
+        />
+      ))}
 
       {/* GPX imported route geometries */}
       {gpxPolylines}

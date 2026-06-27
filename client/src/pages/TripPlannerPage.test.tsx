@@ -11,8 +11,12 @@ import { server } from '../../tests/helpers/msw/server';
 import { http, HttpResponse } from 'msw';
 
 // Mock Leaflet-dependent components
+const capturedMapViewProps: { current: Record<string, any> } = { current: {} };
 vi.mock('../components/Map/MapView', () => ({
-  MapView: () => React.createElement('div', { 'data-testid': 'map-view' }),
+  MapView: (props: Record<string, any>) => {
+    capturedMapViewProps.current = props;
+    return React.createElement('div', { 'data-testid': 'map-view' });
+  },
 }));
 
 vi.mock('react-leaflet', () => ({
@@ -228,6 +232,7 @@ beforeEach(() => {
   mockPlaceSelectionState.selectedPlaceId = null;
   mockPlaceSelectionState.selectedAssignmentId = null;
   capturedDayPlanSidebarProps.current = {};
+  capturedMapViewProps.current = {};
   capturedPlacesSidebarProps.current = {};
   capturedReservationsPanelProps.current = {};
   capturedPlaceFormModalProps.current = {};
@@ -654,6 +659,83 @@ describe('TripPlannerPage', () => {
       await act(async () => {
         capturedDayPlanSidebarProps.current.onSelectDay?.(day.id);
       });
+    });
+
+    it('bumps map fitKey even when selecting the already selected day', async () => {
+      vi.useFakeTimers();
+
+      const { day } = seedTripStore({ id: 42 });
+      seedStore(useTripStore, { selectedDayId: day.id } as any);
+
+      renderPlannerPage(42);
+
+      act(() => { vi.runAllTimers(); });
+
+      vi.useRealTimers();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('day-plan-sidebar')).toBeInTheDocument();
+      });
+
+      const initialFitKey = capturedMapViewProps.current.fitKey;
+
+      await act(async () => {
+        capturedDayPlanSidebarProps.current.onSelectDay?.(day.id);
+      });
+
+      await waitFor(() => {
+        expect(capturedMapViewProps.current.fitKey).toBe(initialFitKey + 1);
+      });
+    });
+
+    it('passes selected route details to the map with a new focus key on each selection', async () => {
+      vi.useFakeTimers();
+
+      seedTripStore({ id: 42 });
+
+      renderPlannerPage(42);
+
+      act(() => { vi.runAllTimers(); });
+
+      vi.useRealTimers();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('day-plan-sidebar')).toBeInTheDocument();
+      });
+
+      const segment = {
+        mid: [48.1, 2.1],
+        from: [48.0, 2.0],
+        to: [48.2, 2.2],
+        distance: 1200,
+        duration: 600,
+        walkingText: '10 min',
+        drivingText: '10 min',
+        distanceText: '1.2 km',
+        durationText: '10 min',
+        coordinates: [[48.0, 2.0], [48.15, 2.4], [48.2, 2.2]],
+      };
+      const selection = {
+        key: 'day-1-route-2',
+        dayId: 1,
+        profile: 'driving',
+        title: 'A to B',
+        fromLabel: 'A',
+        toLabel: 'B',
+        segment,
+      };
+
+      await act(async () => {
+        capturedDayPlanSidebarProps.current.onRouteDetailsSelect?.(selection);
+      });
+      const firstFocusKey = capturedMapViewProps.current.focusedRouteKey;
+
+      await act(async () => {
+        capturedDayPlanSidebarProps.current.onRouteDetailsSelect?.(selection);
+      });
+
+      expect(capturedMapViewProps.current.focusedRouteSegment).toBe(segment);
+      expect(capturedMapViewProps.current.focusedRouteKey).not.toBe(firstFocusKey);
     });
   });
 

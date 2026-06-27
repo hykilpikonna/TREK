@@ -9,6 +9,7 @@ import {
   generateGoogleMapsUrl,
   withHotelBookends,
   __clearRouteCacheForTests,
+  setRouteAlternativeChoice,
 } from './RouteCalculator'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
@@ -237,6 +238,76 @@ describe('calculateRouteWithLegs persistent cache', () => {
     })
   })
 
+  it('FE-COMP-ROUTECALCULATOR-022b: Google Maps routing keeps alternatives and applies the persisted route choice', async () => {
+    let calls = 0
+    server.use(
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        calls += 1
+        const body = await request.json() as any
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: 48.857, lng: 2.354 },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+            {
+              distance: { meters: 1800, text: '1.8 km' },
+              duration: { seconds: 900, text: '15 min' },
+              fare: { amount: 210, text: 'EUR 2.10', currency: 'EUR' },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: 48.859, lng: 2.358 },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const first = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      departureLocalDateTime: '2026-06-01T09:10',
+    })
+    expect(first.legs[0].duration).toBe(600)
+    expect(first.legs[0].alternatives).toHaveLength(2)
+
+    setRouteAlternativeChoice(first.legs[0].routeChoiceKey!, 1)
+    const second = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      departureLocalDateTime: '2026-06-01T09:10',
+    })
+
+    expect(calls).toBe(1)
+    expect(second.legs[0]).toMatchObject({
+      duration: 900,
+      durationText: '15 min',
+      distanceText: '1.8 km',
+      fareText: 'EUR 2.10',
+      routeAlternativeIndex: 1,
+    })
+    expect(second.duration).toBe(900)
+    expect(second.coordinates).toEqual([[wp1.lat, wp1.lng], [48.859, 2.358], [wp2.lat, wp2.lng]])
+
+    const changedDeparture = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      departureLocalDateTime: '2026-06-01T09:20',
+    })
+    expect(changedDeparture.legs[0].duration).toBe(600)
+
+    const restoredDeparture = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      departureLocalDateTime: '2026-06-01T09:10',
+    })
+    expect(restoredDeparture.legs[0].duration).toBe(900)
+    expect(calls).toBe(2)
+  })
+
   it('FE-COMP-ROUTECALCULATOR-023: Google Maps mobile routing uses traffic prediction range', async () => {
     let calls = 0
     const bodies: any[] = []
@@ -291,6 +362,7 @@ describe('calculateRouteWithLegs persistent cache', () => {
     expect(second.legs[0].duration).toBe(1050)
     expect(calls).toBe(1)
     expect(bodies[0].options).toMatchObject({
+      mode: 'driving',
       avoidTolls: true,
       avoidHighways: false,
       avoidFerries: true,
@@ -305,10 +377,351 @@ describe('calculateRouteWithLegs persistent cache', () => {
 
     expect(calls).toBe(2)
     expect(bodies[1].options).toMatchObject({
+      mode: 'driving',
       avoidTolls: false,
       avoidHighways: true,
       avoidFerries: false,
     })
+  })
+
+  it('marks explicit zero Google transit fares as Free and leaves unknown fares empty', async () => {
+    server.use(
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        const body = await request.json() as any
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              fare: { amount: 0, text: 'JPY 0', currency: 'JPY' },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+            {
+              distance: { meters: 1400, text: '1.4 km' },
+              duration: { seconds: 720, text: '12 min' },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const result = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps',
+      profile: 'transit',
+      departureLocalDateTime: '2026-06-01T10:00',
+    })
+
+    expect(result.legs[0].fareText).toBe('Free')
+    expect(result.legs[0].alternatives?.[0].fareText).toBe('Free')
+    expect(result.legs[0].alternatives?.[1].fareText).toBeUndefined()
+  })
+
+  it('marks explicit zero Google mobile tolls as Free', async () => {
+    server.use(
+      http.post('/api/maps/directions-mobile', async ({ request }) => {
+        const body = await request.json() as any
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              tollFee: { amount: 0, text: '\u00a50', currency: 'JPY', label: 'ETC' },
+              overviewGeometry: [
+                { lat: body.from.lat, lng: body.from.lng },
+                { lat: body.to.lat, lng: body.to.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const result = await calculateRouteWithLegs([wp1, wp2], {
+      provider: 'google_maps_mobile',
+      departureLocalDateTime: '2026-06-01T10:05',
+    })
+
+    expect(result.legs[0].tollText).toBe('Free')
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-024: transit routing uses Google preview directions even with the default provider', async () => {
+    let previewCalls = 0
+    let osrmCalls = 0
+    server.use(
+      http.get(`${OSRM_DRIVING_BASE}/:coords`, () => {
+        osrmCalls += 1
+        return HttpResponse.json(buildOsrmRouteResponse())
+      }),
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        previewCalls += 1
+        const body = await request.json() as any
+        expect(body.mode).toBe('transit')
+        expect(body.includeOverviewGeometry).toBe(false)
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 2300, text: '2.3 km' },
+              duration: { seconds: 960, text: '16 min' },
+              overviewGeometry: [
+                { lat: body.origin.lat, lng: body.origin.lng },
+                { lat: body.destination.lat, lng: body.destination.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const result = await calculateRouteWithLegs([wp1, wp2], {
+      profile: 'transit',
+      provider: 'osrm',
+    })
+
+    expect(previewCalls).toBe(1)
+    expect(osrmCalls).toBe(0)
+    expect(result.duration).toBe(960)
+    expect(result.legs[0]).toMatchObject({
+      durationText: '16 min',
+      distanceText: '2.3 km',
+    })
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-024b: transit routing includes wait time from route departure and arrival timestamps', async () => {
+    server.use(
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        const body = await request.json() as any
+        expect(body.mode).toBe('transit')
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1800, text: '1.8 km' },
+              duration: { seconds: 600, text: '10 min' },
+              departureTime: { epochSeconds: 1000, text: '10:00 AM' },
+              arrivalTime: { epochSeconds: 1900, text: '10:15 AM' },
+              legs: [
+                {
+                  distance: { meters: 400, text: '400 m' },
+                  duration: { seconds: 240, text: '4 min' },
+                  steps: [{ duration: { seconds: 240, text: '4 min' }, distance: { meters: 400, text: '400 m' } }],
+                },
+                {
+                  distance: { meters: 1400, text: '1.4 km' },
+                  duration: { seconds: 360, text: '6 min' },
+                  departureTime: { epochSeconds: 1540, text: '10:09 AM' },
+                  arrivalTime: { epochSeconds: 1900, text: '10:15 AM' },
+                  transit: {
+                    lineName: 'Metro 2',
+                    serviceShortName: 'M2',
+                    departureStop: { name: 'Opera', departureTime: { epochSeconds: 1540, text: '10:09 AM' } },
+                    arrivalStop: { name: 'Nation', arrivalTime: { epochSeconds: 1900, text: '10:15 AM' } },
+                  },
+                },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const result = await calculateRouteWithLegs([wp1, wp2], {
+      profile: 'transit',
+      provider: 'google_maps',
+    })
+
+    expect(result.duration).toBe(900)
+    expect(result.legs[0]).toMatchObject({
+      duration: 900,
+      durationText: '15 min',
+      walkingText: '4 min',
+    })
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-025: transit routing preserves mobile geometry and falls back to untimed preview details', async () => {
+    let mobileCalls = 0
+    const previewBodies: any[] = []
+    let osrmCalls = 0
+    server.use(
+      http.get(`${OSRM_DRIVING_BASE}/:coords`, () => {
+        osrmCalls += 1
+        return HttpResponse.json(buildOsrmRouteResponse())
+      }),
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        const body = await request.json() as any
+        previewBodies.push(body)
+        expect(body.mode).toBe('transit')
+        if (body.time) return HttpResponse.json({ routes: [] })
+        return HttpResponse.json({
+          routes: [
+            {
+              legs: [
+                {
+                  distance: { meters: 1200, text: '1.2 km' },
+                  duration: { seconds: 600, text: '10 min' },
+                  transit: {
+                    lineName: 'Metro 2',
+                    serviceShortName: 'M2',
+                    color: '#2563eb',
+                    departureStop: { name: 'Opera' },
+                    arrivalStop: { name: 'Nation' },
+                    stopCount: 5,
+                  },
+                },
+              ],
+            },
+          ],
+        })
+      }),
+      http.post('/api/maps/directions-mobile', async ({ request }) => {
+        mobileCalls += 1
+        const body = await request.json() as any
+        expect(body.options.mode).toBe('transit')
+        expect(body.departureTime).toEqual({ kind: 'departAtLocal', localDateTime: '2026-12-01T09:00' })
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 2300, text: '2.3 km' },
+              duration: { seconds: 960, text: '16 min' },
+              overviewGeometry: [
+                { lat: body.from.lat, lng: body.from.lng },
+                { lat: 48.858, lng: 2.356 },
+                { lat: body.to.lat, lng: body.to.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const result = await calculateRouteWithLegs([wp1, wp2], {
+      profile: 'transit',
+      provider: 'google_maps_mobile',
+      departureLocalDateTime: '2026-12-01T09:00',
+    })
+
+    expect(mobileCalls).toBe(1)
+    expect(previewBodies).toHaveLength(2)
+    expect(previewBodies[0].time).toEqual({ kind: 'departAtLocal', localDateTime: '2026-12-01T09:00' })
+    expect(previewBodies[1].time).toBeUndefined()
+    expect(osrmCalls).toBe(0)
+    expect(result.coordinates).toEqual([[wp1.lat, wp1.lng], [48.858, 2.356], [wp2.lat, wp2.lng]])
+    expect(result.legs[0]).toMatchObject({
+      duration: 600,
+      durationText: '10 min',
+      distance: 1200,
+      distanceText: '1.2 km',
+    })
+    expect(result.legs[0].steps?.[0].transit?.line.shortName).toBe('M2')
+  })
+
+  it('FE-COMP-ROUTECALCULATOR-025b: mobile transit refreshes cached alternatives that are missing step details', async () => {
+    let previewHasDetails = false
+    let mobileCalls = 0
+    let previewCalls = 0
+    server.use(
+      http.post('/api/maps/directions-preview', async ({ request }) => {
+        previewCalls += 1
+        const body = await request.json() as any
+        expect(body.mode).toBe('transit')
+        if (!previewHasDetails) return HttpResponse.json({ routes: [] })
+        return HttpResponse.json({
+          routes: [
+            {
+              index: 0,
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              legs: [
+                {
+                  distance: { meters: 1200, text: '1.2 km' },
+                  duration: { seconds: 600, text: '10 min' },
+                  transit: {
+                    lineName: 'Metro 2',
+                    serviceShortName: 'M2',
+                    color: '#2563eb',
+                    departureStop: { name: 'Opera' },
+                    arrivalStop: { name: 'Nation' },
+                  },
+                },
+              ],
+            },
+            {
+              index: 1,
+              distance: { meters: 2100, text: '2.1 km' },
+              duration: { seconds: 780, text: '13 min' },
+              legs: [
+                {
+                  distance: { meters: 2100, text: '2.1 km' },
+                  duration: { seconds: 780, text: '13 min' },
+                  transit: {
+                    lineName: 'Elizabeth line',
+                    serviceShortName: 'EL',
+                    color: '#7c3aed',
+                    departureStop: { name: 'Paddington' },
+                    arrivalStop: { name: 'Heathrow' },
+                  },
+                },
+              ],
+            },
+          ],
+        })
+      }),
+      http.post('/api/maps/directions-mobile', async ({ request }) => {
+        mobileCalls += 1
+        const body = await request.json() as any
+        return HttpResponse.json({
+          routes: [
+            {
+              distance: { meters: 1200, text: '1.2 km' },
+              duration: { seconds: 600, text: '10 min' },
+              overviewGeometry: [
+                { lat: body.from.lat, lng: body.from.lng },
+                { lat: 48.858, lng: 2.356 },
+                { lat: body.to.lat, lng: body.to.lng },
+              ],
+            },
+            {
+              distance: { meters: 2100, text: '2.1 km' },
+              duration: { seconds: 780, text: '13 min' },
+              overviewGeometry: [
+                { lat: body.from.lat, lng: body.from.lng },
+                { lat: 48.859, lng: 2.357 },
+                { lat: body.to.lat, lng: body.to.lng },
+              ],
+            },
+          ],
+        })
+      })
+    )
+
+    const stale = await calculateRouteWithLegs([wp1, wp2], {
+      profile: 'transit',
+      provider: 'google_maps_mobile',
+    })
+    expect(stale.legs[0].alternatives?.[1].steps).toBeUndefined()
+
+    setRouteAlternativeChoice(stale.legs[0].routeChoiceKey!, 1)
+    previewHasDetails = true
+
+    const refreshed = await calculateRouteWithLegs([wp1, wp2], {
+      profile: 'transit',
+      provider: 'google_maps_mobile',
+    })
+
+    expect(refreshed.legs[0]).toMatchObject({
+      routeAlternativeIndex: 1,
+      durationText: '13 min',
+      distanceText: '2.1 km',
+    })
+    expect(refreshed.legs[0].steps?.[0].transit?.line.shortName).toBe('EL')
+    expect(refreshed.legs[0].alternatives?.[1].steps?.[0].transit?.line.shortName).toBe('EL')
+    expect(mobileCalls).toBe(2)
+    expect(previewCalls).toBe(2)
   })
 })
 

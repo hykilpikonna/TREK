@@ -14,9 +14,10 @@ import { ReservationMapboxOverlay } from './reservationsMapbox'
 import { MAPBOX_DEFAULT_STYLE, normalizeStyleForProvider, type GlMapProvider } from './glProviders'
 import LocationButton from './LocationButton'
 import { useGeolocation } from '../../hooks/useGeolocation'
-import type { Place, Reservation } from '../../types'
+import type { Place, Reservation, RouteSegment } from '../../types'
 import { POI_CATEGORY_BY_KEY, type Poi } from './poiCategories'
 import { buildPlacePopupHtml, buildPoiPopupHtml } from './placePopup'
+import { buildDisplayRouteLineSegments, buildRouteTransferPoints } from './routeLineSegments'
 
 function categoryIconSvg(iconName: string | null | undefined, size: number): string {
   if (isEmojiCategoryIcon(iconName)) {
@@ -36,19 +37,21 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-interface RouteSegment {
-  mid: [number, number]
-  from: [number, number]
-  to: [number, number]
-  walkingText?: string
-  drivingText?: string
+function isValidCoordinate(coord: [number, number] | null | undefined): coord is [number, number] {
+  return !!coord && Number.isFinite(coord[0]) && Number.isFinite(coord[1])
+}
+
+function routeLineBoundsPoints(segments: Array<{ coordinates: [number, number][] }>): [number, number][] {
+  return segments.flatMap(segment => segment.coordinates.filter(isValidCoordinate))
 }
 
 interface Props {
   places: Place[]
   dayPlaces?: Place[]
   route?: [number, number][][] | null
-  routeSegments?: RouteSegment[]
+  routeSegments?: RouteSegment[] | null
+  focusedRouteSegment?: RouteSegment | null
+  focusedRouteKey?: string | null
   selectedPlaceId?: number | null
   onMarkerClick?: (id: number) => void
   onMapClick?: (info: { latlng: { lat: number; lng: number } }) => void
@@ -166,6 +169,8 @@ export function MapViewGL({
   dayPlaces = [],
   route = null,
   routeSegments = [],
+  focusedRouteSegment = null,
+  focusedRouteKey = null,
   selectedPlaceId = null,
   onMarkerClick,
   onMapClick,
@@ -228,6 +233,26 @@ export function MapViewGL({
   onClickRefs.current.marker = onMarkerClick
   onClickRefs.current.map = onMapClick
   onClickRefs.current.context = onMapContextMenu
+  const displayRouteLineSegments = useMemo(
+    () => buildDisplayRouteLineSegments(route, routeSegments),
+    [route, routeSegments],
+  )
+  const focusedRouteLineSegments = useMemo(
+    () => buildDisplayRouteLineSegments(null, focusedRouteSegment ? [focusedRouteSegment] : []),
+    [focusedRouteSegment],
+  )
+  const routeFitPoints = useMemo(() => routeLineBoundsPoints(displayRouteLineSegments), [displayRouteLineSegments])
+  const routeFitKey = useMemo(
+    () => routeFitPoints.map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`).join('|'),
+    [routeFitPoints],
+  )
+  const focusedRouteFitPoints = useMemo(() => routeLineBoundsPoints(focusedRouteLineSegments), [focusedRouteLineSegments])
+  const focusedRouteFitKey = useMemo(
+    () => focusedRouteKey && focusedRouteFitPoints.length > 0
+      ? `${focusedRouteKey}:${focusedRouteFitPoints.map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`).join('|')}`
+      : '',
+    [focusedRouteKey, focusedRouteFitPoints],
+  )
 
   // Build/rebuild the map on provider/style/token/3d change
   useEffect(() => {
@@ -291,15 +316,29 @@ export function MapViewGL({
           id: 'trip-route-casing',
           type: 'line',
           source: 'trip-route',
-          paint: { 'line-color': '#0a5cc2', 'line-width': 8 },
+          paint: { 'line-color': ['coalesce', ['get', 'casingColor'], '#0a5cc2'], 'line-width': 8 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         })
         map.addLayer({
           id: 'trip-route-line',
           type: 'line',
           source: 'trip-route',
-          paint: { 'line-color': '#0a84ff', 'line-width': 5 },
+          paint: { 'line-color': ['coalesce', ['get', 'color'], '#0a84ff'], 'line-width': 5 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
+        })
+      }
+      if (!map.getSource('trip-route-transfers')) {
+        map.addSource('trip-route-transfers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addLayer({
+          id: 'trip-route-transfer-dots',
+          type: 'circle',
+          source: 'trip-route-transfers',
+          paint: {
+            'circle-radius': 5,
+            'circle-color': ['coalesce', ['get', 'color'], '#0a84ff'],
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2.5,
+          },
         })
       }
       // gpx geometries source (place.route_geometry)
@@ -550,14 +589,20 @@ export function MapViewGL({
     const map = mapRef.current
     if (!map) return
     const src = map.getSource('trip-route') as mapboxgl.GeoJSONSource | undefined
-    if (!src) return
-    const features = (route || []).filter(seg => seg && seg.length > 1).map(seg => ({
+    const transferSrc = map.getSource('trip-route-transfers') as mapboxgl.GeoJSONSource | undefined
+    const features = displayRouteLineSegments.map(seg => ({
       type: 'Feature' as const,
-      properties: {},
-      geometry: { type: 'LineString' as const, coordinates: seg.map(([lat, lng]) => [lng, lat]) },
+      properties: { color: seg.color, casingColor: seg.casingColor },
+      geometry: { type: 'LineString' as const, coordinates: seg.coordinates.map(([lat, lng]) => [lng, lat]) },
     }))
-    src.setData({ type: 'FeatureCollection', features })
-  }, [route, mapReady])
+    src?.setData({ type: 'FeatureCollection', features })
+    const transferFeatures = buildRouteTransferPoints(route, routeSegments).map(point => ({
+      type: 'Feature' as const,
+      properties: { color: point.color },
+      geometry: { type: 'Point' as const, coordinates: [point.position[1], point.position[0]] },
+    }))
+    transferSrc?.setData({ type: 'FeatureCollection', features: transferFeatures })
+  }, [displayRouteLineSegments, route, routeSegments, mapReady])
 
   // Travel times now live in the day sidebar (per-segment connectors), not on the map.
 
@@ -627,16 +672,30 @@ export function MapViewGL({
   }, [leftWidth, rightWidth, hasInspector, hasDayDetail])
 
   const prevFitKey = useRef(-1)
+  const pendingRouteFitRef = useRef<{ fitKey: number | null; routeKey: string } | null>(null)
   useEffect(() => {
-    if (fitKey === prevFitKey.current) return
-    prevFitKey.current = fitKey
+    const fitKeyChanged = fitKey !== prevFitKey.current
+    const routeArrivedForPendingFit =
+      !fitKeyChanged
+      && pendingRouteFitRef.current?.fitKey === fitKey
+      && !!routeFitKey
+      && routeFitKey !== pendingRouteFitRef.current.routeKey
+    if (!fitKeyChanged && !routeArrivedForPendingFit) return
     const map = mapRef.current
     if (!map) return
+    if (fitKeyChanged) {
+      prevFitKey.current = fitKey
+      pendingRouteFitRef.current = { fitKey, routeKey: routeFitKey }
+    }
     const target = dayPlaces.length > 0 ? dayPlaces : places
-    const valid = target.filter(p => p.lat && p.lng)
-    if (valid.length === 0) return
+    const markerPoints = target
+      .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      .map(p => [p.lat!, p.lng!] as [number, number])
+    const fitPoints = routeFitPoints.length > 0 ? [...routeFitPoints, ...markerPoints] : markerPoints
+    if (fitPoints.length === 0) return
     const bounds = new gl.LngLatBounds()
-    valid.forEach(p => bounds.extend([p.lng, p.lat]))
+    fitPoints.forEach(([lat, lng]) => bounds.extend([lng, lat]))
+    let fitted = false
     const run = () => {
       try {
         map.fitBounds(bounds, {
@@ -645,11 +704,35 @@ export function MapViewGL({
           pitch: enableMapbox3d ? 45 : 0,
           duration: 400,
         })
+        fitted = true
       } catch { /* noop */ }
     }
-    if (map.loaded()) run()
-    else map.once('load', run)
-  }, [fitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+    run()
+    if (!fitted && typeof map.once === 'function') map.once('load', run)
+    if (routeArrivedForPendingFit) pendingRouteFitRef.current = null
+  }, [fitKey, routeFitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!focusedRouteFitKey || focusedRouteFitPoints.length < 2) return
+    const map = mapRef.current
+    if (!map) return
+    const bounds = new gl.LngLatBounds()
+    focusedRouteFitPoints.forEach(([lat, lng]) => bounds.extend([lng, lat]))
+    let fitted = false
+    const run = () => {
+      try {
+        map.fitBounds(bounds, {
+          padding: paddingOpts,
+          maxZoom: 16,
+          pitch: enableMapbox3d ? 45 : 0,
+          duration: 400,
+        })
+        fitted = true
+      } catch { /* noop */ }
+    }
+    run()
+    if (!fitted && typeof map.once === 'function') map.once('load', run)
+  }, [focusedRouteFitKey, focusedRouteFitPoints, paddingOpts, enableMapbox3d, gl])
 
   // flyTo selected place
   useEffect(() => {
