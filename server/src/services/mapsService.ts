@@ -182,7 +182,7 @@ function localLanguageForCountry(countryCode?: string | null): string | null {
 
 const GOOGLE_FTID_RE = GOOGLE_MAPS_FTID_RE;
 const DETAILS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DETAILS_CACHE_SCHEMA_VERSION = 8;
+const DETAILS_CACHE_SCHEMA_VERSION = 9;
 
 export function googleFtidFromMapsUrl(url?: string | null): string | null {
   if (!url) return null;
