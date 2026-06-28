@@ -4,9 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../tests/helpers/msw/server';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
-import { buildUser, buildAdmin, buildTrip } from '../../tests/helpers/factories';
+import { buildUser, buildAdmin, buildTrip, buildSettings } from '../../tests/helpers/factories';
 import { useAuthStore } from '../store/authStore';
 import { usePermissionsStore } from '../store/permissionsStore';
+import { useSettingsStore } from '../store/settingsStore';
 import DashboardPage from './DashboardPage';
 
 beforeEach(() => {
@@ -798,10 +799,51 @@ describe('DashboardPage', () => {
     });
   });
 
+  describe('FE-PAGE-DASH-033: Atlas distance respects distance unit setting', () => {
+    const distanceValue = (text: string) =>
+      screen.getByText((_, element) =>
+        element?.classList.contains('value') === true &&
+        element.textContent?.replace(/\s+/g, ' ').trim() === text
+      );
+
+    beforeEach(() => {
+      server.use(
+        http.get('/api/auth/travel-stats', () =>
+          HttpResponse.json({
+            totalTrips: 1,
+            totalDays: 1,
+            totalPlaces: 1,
+            totalDistanceKm: 10,
+            countries: [],
+          })
+        ),
+      );
+    });
+
+    it('renders metric atlas distance as kilometers', async () => {
+      seedStore(useSettingsStore, { settings: buildSettings({ distance_unit: 'metric' }) });
+
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(distanceValue('10 km')).toBeInTheDocument();
+      });
+    });
+
+    it('renders imperial atlas distance as miles', async () => {
+      seedStore(useSettingsStore, { settings: buildSettings({ distance_unit: 'imperial' }) });
+
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(distanceValue('6.2 mi')).toBeInTheDocument();
+      });
+    });
+  });
+
   describe('FE-PAGE-DASH-032: Dark mode detection uses window.matchMedia', () => {
     it('renders without error when dark_mode is set to auto', async () => {
       // Seed settings with dark_mode = 'auto' to exercise the matchMedia branch
-      const { useSettingsStore } = await import('../store/settingsStore');
       seedStore(useSettingsStore, {
         settings: {
           map_tile_url: '',
@@ -812,6 +854,7 @@ describe('DashboardPage', () => {
           default_currency: 'USD',
           language: 'en',
           temperature_unit: 'fahrenheit',
+          distance_unit: 'metric',
           time_format: '12h',
           show_place_description: false,
           blur_booking_codes: false,
@@ -829,6 +872,34 @@ describe('DashboardPage', () => {
 
       // Page renders successfully with dark_mode = 'auto'
       expect(screen.getByText(/my trips/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('FE-PAGE-DASH-034: dashboard widgets persist to settings, not localStorage (#1311)', () => {
+    it('reads the timezone widget zones from the settings store', async () => {
+      // A zone that is NOT in the hardcoded default ([home, London, Tokyo]) — its presence
+      // proves the widget reads the stored preference rather than the old localStorage default.
+      seedStore(useSettingsStore, { settings: buildSettings({ dashboard_timezones: ['America/New_York'] }), isLoaded: true });
+      render(<DashboardPage />);
+      await waitFor(() => expect(screen.getByRole('button', { name: /add timezone/i })).toBeInTheDocument());
+      expect(screen.getByText('New York')).toBeInTheDocument();
+    });
+
+    it('migrates the pre-3.1.3 localStorage prefs into settings and clears the legacy keys', async () => {
+      localStorage.setItem('trek_fx_from', 'CAD');
+      localStorage.setItem('trek_fx_to', 'CHF');
+      localStorage.setItem('trek_dashboard_tz', JSON.stringify(['America/New_York']));
+      seedStore(useSettingsStore, { settings: buildSettings(), isLoaded: true });
+      render(<DashboardPage />);
+      // The one-time migration runs on mount (settings already loaded) and removes the keys.
+      await waitFor(() => {
+        expect(localStorage.getItem('trek_fx_from')).toBeNull();
+        expect(localStorage.getItem('trek_dashboard_tz')).toBeNull();
+      });
+      const s = useSettingsStore.getState().settings;
+      expect(s.dashboard_fx_from).toBe('CAD');
+      expect(s.dashboard_fx_to).toBe('CHF');
+      expect(s.dashboard_timezones).toEqual(['America/New_York']);
     });
   });
 });

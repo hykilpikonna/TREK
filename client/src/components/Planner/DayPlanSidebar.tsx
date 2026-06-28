@@ -526,6 +526,9 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     onRouteDetailsSelect?.(selection)
   }
   const optimizeFromAccommodation = useSettingsStore(s => s.settings.optimize_from_accommodation)
+  // Recompute the hotel/route legs when the user flips km↔mi so the connector
+  // distances refresh instead of showing stale cached text (#1300).
+  const distanceUnit = useSettingsStore(s => s.settings.distance_unit)
   const legsAbortRef = useRef<AbortController | null>(null)
   const resizeRef = useRef<{ assignmentId: number; dayId: number; startY: number; startDuration: number; draftDuration: number } | null>(null)
   const [resizePreview, setResizePreview] = useState<{ assignmentId: number; durationMinutes: number } | null>(null)
@@ -793,20 +796,23 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
       for (const day of days) {
         if (controller.signal.aborted) return
         const merged = mergedItemsMap[day.id] || []
-        const { morning: startHotel, evening: endHotel } =
-          optimizeFromAccommodation !== false ? getDayBookendHotels(day, days, accommodations) : {}
-        const wayPts: { lat: number; lng: number }[] = []
+        const bookends = optimizeFromAccommodation !== false ? getDayBookendHotels(day, days, accommodations) : null
+        const startHotel = bookends?.morning
+        const endHotel = bookends?.evening
+        const wayPts: { lat: number; lng: number; isPlace: boolean }[] = []
         for (const it of merged) {
           if (it.type === 'place' && it.data.place?.lat && it.data.place?.lng) {
-            wayPts.push({ lat: it.data.place.lat, lng: it.data.place.lng })
+            wayPts.push({ lat: it.data.place.lat, lng: it.data.place.lng, isPlace: true })
           } else if (it.type === 'transport') {
             const { from, to } = getTransportRouteEndpoints(it.data, day.id)
-            if (from) wayPts.push({ lat: from.lat, lng: from.lng })
-            if (to) wayPts.push({ lat: to.lat, lng: to.lng })
+            if (from) wayPts.push({ lat: from.lat, lng: from.lng, isPlace: false })
+            if (to) wayPts.push({ lat: to.lat, lng: to.lng, isPlace: false })
           }
         }
         const firstWay = wayPts[0]
         const lastWay = wayPts[wayPts.length - 1]
+        const wantTop = !!(startHotel && firstWay && (firstWay.isPlace || bookends?.morningIsSleptHere))
+        const wantBottom = !!(endHotel && lastWay && (lastWay.isPlace || bookends?.eveningIsOvernight))
         const hotel: DayHotelRouteLegs = {}
 
         const map: Record<number, RouteSegment> = {}
@@ -819,7 +825,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
             departureMinutes: number,
           ) => legBetween(a, b, localDateTimeForDayMinute(day, departureMinutes))
 
-          if (startHotel && firstWay) {
+          if (wantTop && startHotel && firstWay) {
             const seg = await timedLeg(
               { lat: startHotel.place_lat as number, lng: startHotel.place_lng as number },
               { lat: firstWay.lat, lng: firstWay.lng },
@@ -865,7 +871,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
             }
           }
 
-          if (endHotel && current) {
+          if (wantBottom && endHotel && current) {
             const seg = await timedLeg(current, { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number }, cursor)
             if (seg) hotel.bottom = { seg, name: hotelName(endHotel) }
           }
@@ -906,11 +912,11 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
             }
           }
 
-          if (startHotel && firstWay) {
+          if (wantTop && startHotel && firstWay) {
             const seg = await legBetween({ lat: startHotel.place_lat as number, lng: startHotel.place_lng as number }, { lat: firstWay.lat, lng: firstWay.lng })
             if (seg) hotel.top = { seg, name: hotelName(startHotel) }
           }
-          if (endHotel && lastWay) {
+          if (wantBottom && endHotel && lastWay) {
             const seg = await legBetween({ lat: lastWay.lat, lng: lastWay.lng }, { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number })
             if (seg) hotel.bottom = { seg, name: hotelName(endHotel) }
           }
@@ -931,7 +937,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
       }
     })
     return () => controller.abort()
-  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes, routeChoiceVersion])
+  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes, routeChoiceVersion, distanceUnit])
 
   const openAddNote = (dayId, e) => {
     e?.stopPropagation()
@@ -1476,6 +1482,9 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
 
 const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarProps) {
   const S = useDayPlanSidebar(props)
+  // Needed by the route-tools visibility gate in the render below (#1330); the hook
+  // keeps its own copy, so read it reactively here in the component scope too.
+  const optimizeFromAccommodation = useSettingsStore(s => s.settings.optimize_from_accommodation)
   const {
     tripId,
     trip,
@@ -1708,6 +1717,16 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           const cost = dayTotalCost(day.id, assignments, currency)
           const formattedDate = formatDate(day.date, locale)
           const loc = da.find(a => a.place?.lat && a.place?.lng)
+          // Route tools normally need 2+ stops, but a single located place is still
+          // routable when accommodation optimization can bookend it with a hotel
+          // (hotel → place → hotel, the same line the map draws) — otherwise the tools
+          // vanish on such a day (#1330). Purely additive to the 2+ case.
+          const routeBookends = optimizeFromAccommodation !== false ? getDayBookendHotels(day, days, accommodations) : null
+          const hasRouteBookend = !!(
+            (routeBookends?.morning?.place_lat != null && routeBookends?.morning?.place_lng != null) ||
+            (routeBookends?.evening?.place_lat != null && routeBookends?.evening?.place_lng != null)
+          )
+          const routeToolsRoutable = da.length >= 2 || (loc != null && hasRouteBookend)
           const isDragTarget = dragOverDayId === day.id
           const merged = mergedItemsMap[day.id] || []
           const dayNoteUi = noteUi[day.id]
@@ -3199,8 +3218,8 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                     )}
                   </div>
 
-                  {/* Routen-Werkzeuge (ausgewählter Tag, 2+ Orte) */}
-                  {(isSelected || (showRouteToolsWhenExpanded && isExpanded)) && getDayAssignments(day.id).length >= 2 && (
+                  {/* Routen-Werkzeuge (ausgewählter Tag, 2+ Orte — oder 1 Ort mit Hotel-Bookend, #1330) */}
+                  {(isSelected || (showRouteToolsWhenExpanded && isExpanded)) && routeToolsRoutable && (
                     <div style={{ padding: '10px 16px 12px', borderTop: '1px solid var(--border-faint)', display: 'flex', flexDirection: 'column', gap: 7 }}>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
                         <button

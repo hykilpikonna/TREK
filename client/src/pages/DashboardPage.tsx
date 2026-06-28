@@ -19,6 +19,7 @@ import {
   LayoutGrid, List, Ticket, X,
 } from 'lucide-react'
 import { formatTime, splitReservationDateTime } from '../utils/formatters'
+import { convertDistance, getDistanceUnitLabel } from '../utils/units'
 import { useSettingsStore } from '../store/settingsStore'
 import '../styles/dashboard.css'
 
@@ -358,12 +359,27 @@ function BoardingPassHero({ trip, bundle, locale, onOpen, onEdit, onCopy, onArch
 }
 
 // ── Atlas / stats row ────────────────────────────────────────────────────────
+function formatCompactDistance(value: number): string {
+  const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0
+  // String() keeps a '.' decimal regardless of locale (no "1,5k" in non-English UIs).
+  if (safeValue >= 1000) {
+    return `${String(Math.round(safeValue / 100) / 10)}k`
+  }
+  const rounded = Math.round(safeValue * 10) / 10
+  if (safeValue > 0 && rounded === 0) return '<0.1'
+  return String(rounded)
+}
+
 function AtlasStats({ stats }: { stats: TravelStats | null }): React.ReactElement {
   const { t } = useTranslation()
+  const distanceUnit = useSettingsStore(s => s.settings.distance_unit) || 'metric'
   const countries = stats?.countries || []
   const distanceKm = stats?.totalDistanceKm || 0
-  const distanceText = distanceKm >= 1000 ? `${(distanceKm / 1000).toFixed(1)}k` : String(distanceKm)
-  const equatorTimes = (distanceKm / 40075).toFixed(2)
+  const distance = convertDistance(distanceKm, distanceUnit)
+  const distanceText = formatCompactDistance(distance)
+  const equatorDistance = convertDistance(40075, distanceUnit)
+  const equatorTimes = (distance / equatorDistance).toFixed(2)
+  const distanceLabel = getDistanceUnitLabel(distanceUnit)
 
   return (
     <section className="atlas">
@@ -401,7 +417,7 @@ function AtlasStats({ stats }: { stats: TravelStats | null }): React.ReactElemen
 
       <div className="atlas-card">
         <div className="label">{t('dashboard.atlas.distanceFlown')}</div>
-        <div className="value mono">{distanceText} <span className="unit">{t('dashboard.atlas.kmUnit')}</span></div>
+        <div className="value mono">{distanceText} <span className="unit">{distanceLabel}</span></div>
         <div className="delta">{t('dashboard.atlas.aroundEquator', { count: equatorTimes })}</div>
         <svg className="spark" width="80" height="36" viewBox="0 0 80 36">
           <circle cx="40" cy="18" r="14" fill="none" stroke="oklch(0.88 0.01 70)" strokeWidth="2" />
@@ -475,8 +491,12 @@ const FX_FALLBACK = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'CNY', 'SE
 
 function CurrencyTool(): React.ReactElement {
   const { t } = useTranslation()
-  const [from, setFrom] = useState(() => localStorage.getItem('trek_fx_from') || 'EUR')
-  const [to, setTo] = useState(() => localStorage.getItem('trek_fx_to') || 'USD')
+  const isLoaded = useSettingsStore(s => s.isLoaded)
+  const updateSetting = useSettingsStore(s => s.updateSetting)
+  const from = useSettingsStore(s => s.settings.dashboard_fx_from) || 'EUR'
+  const to = useSettingsStore(s => s.settings.dashboard_fx_to) || 'USD'
+  const setFrom = (v: string) => { updateSetting('dashboard_fx_from', v).catch(() => {}) }
+  const setTo = (v: string) => { updateSetting('dashboard_fx_to', v).catch(() => {}) }
   const [amount, setAmount] = useState('100')
   const [rates, setRates] = useState<Record<string, number> | null>(null)
 
@@ -494,7 +514,18 @@ function CurrencyTool(): React.ReactElement {
   }, [from])
 
   useEffect(() => { fetchRate() }, [fetchRate])
-  useEffect(() => { localStorage.setItem('trek_fx_from', from); localStorage.setItem('trek_fx_to', to) }, [from, to])
+  // One-time migration of the pre-3.1.3 localStorage values into the user's settings,
+  // so a (docker) upgrade no longer resets the widget (#1311).
+  useEffect(() => {
+    if (!isLoaded) return
+    const lf = localStorage.getItem('trek_fx_from')
+    const lt = localStorage.getItem('trek_fx_to')
+    if (!lf && !lt) return
+    if (lf) updateSetting('dashboard_fx_from', lf).catch(() => {})
+    if (lt) updateSetting('dashboard_fx_to', lt).catch(() => {})
+    localStorage.removeItem('trek_fx_from')
+    localStorage.removeItem('trek_fx_to')
+  }, [isLoaded, updateSetting])
 
   const currencies = rates ? Object.keys(rates).sort() : FX_FALLBACK
   const ccyOptions = currencies.map(c => ({ value: c, label: c }))
@@ -549,13 +580,12 @@ function TimezoneTool({ locale }: { locale: string }): React.ReactElement {
   const { t } = useTranslation()
   const home = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [now, setNow] = useState(() => new Date())
-  const [zones, setZones] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem('trek_dashboard_tz')
-      if (raw) return JSON.parse(raw)
-    } catch { /* ignore malformed storage */ }
-    return [home, ...DEFAULT_ZONES]
-  })
+  const isLoaded = useSettingsStore(s => s.isLoaded)
+  const updateSetting = useSettingsStore(s => s.updateSetting)
+  const stored = useSettingsStore(s => s.settings.dashboard_timezones)
+  // Unset (never chosen) falls back to home + defaults; an explicit list is honoured.
+  const zones = stored ?? [home, ...DEFAULT_ZONES]
+  const setZones = (next: string[]) => { updateSetting('dashboard_timezones', next).catch(() => {}) }
   const [adding, setAdding] = useState(false)
 
   // A minute's resolution is plenty for clocks and keeps re-renders cheap.
@@ -564,7 +594,18 @@ function TimezoneTool({ locale }: { locale: string }): React.ReactElement {
     return () => clearInterval(id)
   }, [])
 
-  useEffect(() => { localStorage.setItem('trek_dashboard_tz', JSON.stringify(zones)) }, [zones])
+  // One-time migration of the pre-3.1.3 localStorage value into the user's settings,
+  // so a (docker) upgrade no longer resets the widget (#1311).
+  useEffect(() => {
+    if (!isLoaded) return
+    const raw = localStorage.getItem('trek_dashboard_tz')
+    if (!raw) return
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) updateSetting('dashboard_timezones', parsed).catch(() => {})
+    } catch { /* ignore malformed storage */ }
+    localStorage.removeItem('trek_dashboard_tz')
+  }, [isLoaded, updateSetting])
 
   const allZones = React.useMemo<string[]>(() => {
     const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf
@@ -575,8 +616,8 @@ function TimezoneTool({ locale }: { locale: string }): React.ReactElement {
     .filter(z => !zones.includes(z))
     .map(z => ({ value: z, label: z.replace(/_/g, ' '), searchLabel: z }))
 
-  const addZone = (tz: string) => { if (tz) setZones(prev => prev.includes(tz) ? prev : [...prev, tz]); setAdding(false) }
-  const removeZone = (tz: string) => setZones(prev => prev.filter(z => z !== tz))
+  const addZone = (tz: string) => { if (tz && !zones.includes(tz)) setZones([...zones, tz]); setAdding(false) }
+  const removeZone = (tz: string) => setZones(zones.filter(z => z !== tz))
 
   const timeIn = (tz: string) => now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
   const offsetLabel = (tz: string) => {

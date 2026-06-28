@@ -30,6 +30,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     default_currency: 'USD',
     language: localStorage.getItem('app_language') || 'en',
     temperature_unit: 'fahrenheit',
+    distance_unit: 'metric',
     time_format: '12h',
     show_place_description: false,
     optimize_from_accommodation: true,
@@ -37,8 +38,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     map_poi_pill_enabled: true,
     mapbox_access_token: '',
     mapbox_style: 'mapbox://styles/mapbox/standard',
+    maplibre_style: '',
     mapbox_3d_enabled: true,
     mapbox_quality_mode: false,
+    dashboard_fx_from: 'EUR',
+    dashboard_fx_to: 'USD',
+    // dashboard_timezones is intentionally left unset so the widget can tell "never
+    // chosen" (fall back to home + defaults) from an explicitly emptied list.
   },
   isLoaded: false,
 

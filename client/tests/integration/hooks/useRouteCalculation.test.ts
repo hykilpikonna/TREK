@@ -331,6 +331,126 @@ describe('useRouteCalculation', () => {
     expect(result.current.routeSegments).toEqual([]);
   });
 
+  it('FE-HOOK-ROUTE-014: #1321 day-1 arrival draws no check-in-hotel → departure leg', async () => {
+    // Day 1 = arrival from home: a flight (departure → arrival airport) then two activities,
+    // checking into a hotel tonight. The morning hotel is only a check-in fallback, so the
+    // hotel must NOT be bookended to the flight's departure point; the evening leg stays.
+    const dep = { lat: 50.03, lng: 8.57 };  // home/departure airport
+    const arr = { lat: 41.30, lng: 2.08 };  // destination airport
+    const actA = buildPlace({ lat: 41.38, lng: 2.17 });
+    const actB = buildPlace({ lat: 41.40, lng: 2.19 });
+    const hotel = { lat: 41.39, lng: 2.16 };
+
+    const flight = {
+      id: 100, type: 'flight', day_id: 1, end_day_id: 1, day_plan_position: 0,
+      endpoints: [
+        { role: 'from', lat: dep.lat, lng: dep.lng },
+        { role: 'to', lat: arr.lat, lng: arr.lng },
+      ],
+    };
+    const a1 = buildAssignment({ day_id: 1, order_index: 1, place: actA });
+    const a2 = buildAssignment({ day_id: 1, order_index: 2, place: actB });
+    const accommodations = [{ id: 1, start_day_id: 1, end_day_id: 2, place_lat: hotel.lat, place_lng: hotel.lng }];
+    // A single stable store reference (like buildMockStore) so selectedDayAssignments
+    // keeps its identity across renders and the effect doesn't loop.
+    const store = { assignments: { '1': [a1, a2] } } as unknown as TripStoreState;
+    useTripStore.setState({
+      assignments: store.assignments,
+      reservations: [flight],
+      days: [{ id: 1, day_number: 1 }, { id: 2, day_number: 2 }],
+    } as any);
+
+    const { result } = renderHook(() =>
+      useRouteCalculation(store, 1, true, 'driving', accommodations as any)
+    );
+
+    await act(async () => {});
+
+    const legs = (result.current.route ?? []).map(run => run.map(p => `${p[0]},${p[1]}`));
+    // The spurious morning bookend [hotel → departure airport] must be gone.
+    expect(legs).not.toContainEqual([`${hotel.lat},${hotel.lng}`, `${dep.lat},${dep.lng}`]);
+    // The route starts the day's run at the arrival airport, not the hotel.
+    expect(result.current.route?.[0]?.[0]).toEqual([arr.lat, arr.lng]);
+    // The evening leg [last activity → hotel] is still drawn.
+    expect(legs).toContainEqual([`${actB.lat},${actB.lng}`, `${hotel.lat},${hotel.lng}`]);
+  });
+
+  it('FE-HOOK-ROUTE-015: day-1 with no transport keeps the hotel → first-activity leg', async () => {
+    // Guard against over-suppression: with no arrival transport, the check-in day is a
+    // home-base loop and the hotel → first-stop leg must remain.
+    const actA = buildPlace({ lat: 41.38, lng: 2.17 });
+    const actB = buildPlace({ lat: 41.40, lng: 2.19 });
+    const hotel = { lat: 41.39, lng: 2.16 };
+    const a1 = buildAssignment({ day_id: 1, order_index: 0, place: actA });
+    const a2 = buildAssignment({ day_id: 1, order_index: 1, place: actB });
+    const accommodations = [{ id: 1, start_day_id: 1, end_day_id: 2, place_lat: hotel.lat, place_lng: hotel.lng }];
+    const store = { assignments: { '1': [a1, a2] } } as unknown as TripStoreState;
+    useTripStore.setState({
+      assignments: store.assignments,
+      reservations: [],
+      days: [{ id: 1, day_number: 1 }, { id: 2, day_number: 2 }],
+    } as any);
+
+    const { result } = renderHook(() =>
+      useRouteCalculation(store, 1, true, 'driving', accommodations as any)
+    );
+
+    await act(async () => {});
+
+    const legs = (result.current.route ?? []).map(run => run.map(p => `${p[0]},${p[1]}`));
+    expect(legs).toContainEqual([`${hotel.lat},${hotel.lng}`, `${actA.lat},${actA.lng}`]);
+    expect(legs).toContainEqual([`${actB.lat},${actB.lng}`, `${hotel.lat},${hotel.lng}`]);
+  });
+
+  it('FE-HOOK-ROUTE-016: #1297 transfer day with no activities draws the hotel → hotel leg', async () => {
+    // Day 2 is a pure transfer: check out of hotel A (slept there last night) and into
+    // hotel B tonight, with no activities or transport. The map must still draw A → B.
+    const hotelA = { lat: 48.86, lng: 2.35 };
+    const hotelB = { lat: 45.76, lng: 4.84 };
+    const accommodations = [
+      { id: 1, start_day_id: 1, end_day_id: 2, place_lat: hotelA.lat, place_lng: hotelA.lng },
+      { id: 2, start_day_id: 2, end_day_id: 3, place_lat: hotelB.lat, place_lng: hotelB.lng },
+    ];
+    const store = { assignments: {} } as unknown as TripStoreState;
+    useTripStore.setState({
+      assignments: {},
+      reservations: [],
+      days: [{ id: 1, day_number: 1 }, { id: 2, day_number: 2 }, { id: 3, day_number: 3 }],
+    } as any);
+
+    const { result } = renderHook(() =>
+      useRouteCalculation(store, 2, true, 'driving', accommodations as any)
+    );
+
+    await act(async () => {});
+
+    const legs = (result.current.route ?? []).map(run => run.map(p => `${p[0]},${p[1]}`));
+    expect(legs).toContainEqual([`${hotelA.lat},${hotelA.lng}`, `${hotelB.lat},${hotelB.lng}`]);
+  });
+
+  it('FE-HOOK-ROUTE-017: #1297 rest day in one hotel with no activities draws nothing', async () => {
+    // Guard against a zero-length loop: morning and evening hotel are the same, no
+    // activities — no transfer leg should be drawn.
+    const hotel = { lat: 48.86, lng: 2.35 };
+    const accommodations = [
+      { id: 1, start_day_id: 1, end_day_id: 4, place_lat: hotel.lat, place_lng: hotel.lng },
+    ];
+    const store = { assignments: {} } as unknown as TripStoreState;
+    useTripStore.setState({
+      assignments: {},
+      reservations: [],
+      days: [{ id: 1, day_number: 1 }, { id: 2, day_number: 2 }, { id: 3, day_number: 3 }],
+    } as any);
+
+    const { result } = renderHook(() =>
+      useRouteCalculation(store, 2, true, 'driving', accommodations as any)
+    );
+
+    await act(async () => {});
+
+    expect(result.current.route).toBeNull();
+  });
+
   it('FE-HOOK-ROUTE-012: setRoute and setRouteInfo are exposed', () => {
     const store = buildMockStore({});
     const { result } = renderHook(() =>

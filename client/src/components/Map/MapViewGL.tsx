@@ -11,7 +11,7 @@ import { CATEGORY_ICON_MAP, isEmojiCategoryIcon } from '../shared/categoryIcons'
 import { isStandardFamily, supportsCustom3d, wantsTerrain, addCustom3dBuildings, addTerrainAndSky } from './mapboxSetup'
 import { attachLocationMarker, type LocationMarkerHandle } from './locationMarkerMapbox'
 import { ReservationMapboxOverlay } from './reservationsMapbox'
-import { MAPBOX_DEFAULT_STYLE, normalizeStyleForProvider, type GlMapProvider } from './glProviders'
+import { MAPBOX_DEFAULT_STYLE, styleForActiveProvider, basemapLanguage, type GlMapProvider } from './glProviders'
 import LocationButton from './LocationButton'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import type { Place, Reservation, RouteSegment } from '../../types'
@@ -194,13 +194,15 @@ export function MapViewGL({
   onMapReady,
 }: Props) {
   const rawMapboxStyle = useSettingsStore(s => s.settings.mapbox_style || MAPBOX_DEFAULT_STYLE)
+  const rawMaplibreStyle = useSettingsStore(s => s.settings.maplibre_style || '')
   const mapboxToken = useSettingsStore(s => s.settings.mapbox_access_token || '')
   const mapbox3d = useSettingsStore(s => s.settings.mapbox_3d_enabled !== false)
   const mapboxQuality = useSettingsStore(s => s.settings.mapbox_quality_mode === true)
   const showEndpointLabels = useSettingsStore(s => s.settings.map_booking_labels) !== false
+  const mapLang = useSettingsStore(s => s.settings.language)
   const isMapLibre = glProvider === 'maplibre-gl'
   const gl = (isMapLibre ? maplibregl : mapboxgl) as any
-  const glStyle = normalizeStyleForProvider(glProvider, rawMapboxStyle)
+  const glStyle = styleForActiveProvider(glProvider, rawMapboxStyle, rawMaplibreStyle)
   const enableMapbox3d = !isMapLibre && mapbox3d
   const placesPhotosEnabled = useAuthStore(s => s.placesPhotosEnabled)
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>(getAllThumbs)
@@ -436,7 +438,9 @@ export function MapViewGL({
         }
       })
     }
-    map.on('render', syncMarkerAltitudes)
+    // Terrain altitude sync only matters with mapbox 3D/terrain on; skip the per-frame
+    // listener entirely for MapLibre and flat mapbox styles.
+    if (enableMapbox3d) map.on('render', syncMarkerAltitudes)
 
     return () => {
       canvas.removeEventListener('mousedown', onAuxDown)
@@ -458,6 +462,16 @@ export function MapViewGL({
       setMapReady(false)
     }
   }, [glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality]) // rebuild on provider/style changes only
+
+  // Pin the basemap label language to the UI language so labels don't fall back to the
+  // browser/OS locale and stack multiple scripts per place (e.g. "India/भारत/India", #1299).
+  // Mapbox Standard exposes this via a basemap config property; classic and MapLibre styles
+  // are left as-is. Runs on load (mapReady) and whenever the UI language changes.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || isMapLibre || !isStandardFamily(glStyle)) return
+    try { map.setConfigProperty('basemap', 'language', basemapLanguage(mapLang)) } catch { /* style/SDK may not support the basemap language property */ }
+  }, [mapLang, mapReady, isMapLibre, glStyle])
 
   // Photo loading — mirrors the Leaflet MapView. Updates via RAF to batch
   // simultaneous thumb arrivals into one re-render.

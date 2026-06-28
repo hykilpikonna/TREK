@@ -60,6 +60,8 @@ export function useRouteCalculation(
   const routeAbortRef = useRef<AbortController | null>(null)
   const reservationsForSignature = useTripStore((s) => s.reservations)
   const optimizeFromAccommodation = useSettingsStore((s) => s.settings.optimize_from_accommodation)
+  // Recompute when the user flips km/mi so leg distances formatted at compute time refresh.
+  const distanceUnit = useSettingsStore((s) => s.settings.distance_unit)
   const avoidTolls = googleRoutingOptions.avoidTolls === true
   const avoidHighways = googleRoutingOptions.avoidHighways === true
   const avoidFerries = googleRoutingOptions.avoidFerries === true
@@ -153,16 +155,49 @@ export function useRouteCalculation(
     }
     if (currentRun.length >= 2) runs.push(currentRun)
 
-    const { morning: startHotel, evening: endHotel } =
-      selectedDay && optimizeFromAccommodation !== false ? getDayBookendHotels(selectedDay, allDays, accommodations) : {}
+    // Bookend the route with the day's accommodation: a hotel → first-stop run and
+    // a last-stop → hotel run, so the drawn line matches the sidebar's hotel legs.
+    // getDayBookendHotels returns the morning/evening hotel (they differ only on a
+    // transfer day) and already filters to accommodations that have coordinates.
+    const bookends = selectedDay && optimizeFromAccommodation !== false
+      ? getDayBookendHotels(selectedDay, allDays, accommodations)
+      : null
     const flatPts: { lat: number; lng: number }[] = []
     for (const entry of entries) {
       if (entry.kind === 'place') flatPts.push({ lat: entry.lat, lng: entry.lng })
       else { if (entry.from) flatPts.push(entry.from); if (entry.to) flatPts.push(entry.to) }
     }
-    const startHotelPoint = accommodationPoint(startHotel)
-    const endHotelPoint = accommodationPoint(endHotel)
-    const runsWithHotel = withHotelBookends(runs, flatPts[0], flatPts[flatPts.length - 1], startHotelPoint, endHotelPoint)
+    // Only draw a hotel bookend when the leg is real. A hotel → first-stop leg holds
+    // if the first stop is a place, or if you actually slept in that hotel last night;
+    // on a day-1 arrival the morning hotel is just a check-in fallback and the first
+    // waypoint is the transport's departure point, so [hotel → departure] is dropped
+    // (#1321). Symmetrically, [last-stop → hotel] is dropped when you leave on a transport
+    // in the evening and don't sleep in that hotel tonight.
+    const contributes = (e: Entry) => e.kind === 'place' || !!e.from || !!e.to
+    const firstStop = entries.find(contributes)
+    const lastStop = [...entries].reverse().find(contributes)
+    const drawMorning = firstStop?.kind === 'place' || !!bookends?.morningIsSleptHere
+    const drawEvening = lastStop?.kind === 'place' || !!bookends?.eveningIsOvernight
+    const startHotelPoint = drawMorning ? accommodationPoint(bookends?.morning) : null
+    const endHotelPoint = drawEvening ? accommodationPoint(bookends?.evening) : null
+    const runsWithHotel = withHotelBookends(
+      runs,
+      flatPts[0],
+      flatPts[flatPts.length - 1],
+      startHotelPoint,
+      endHotelPoint,
+    )
+
+    // Transfer day with no activities: you check out of one accommodation and into
+    // another, so there are no waypoints for withHotelBookends to attach a leg to.
+    // Draw the hotel → hotel transfer directly. Gated on both bookends being real
+    // (drawMorning/drawEvening already exclude the #1321 arrival fallback) and the two
+    // hotels being distinct, so an ordinary same-hotel rest day still draws nothing.
+    if (runsWithHotel.length === 0 && drawMorning && drawEvening) {
+      const m = startHotelPoint
+      const e = endHotelPoint
+      if (m && e && (m.lat !== e.lat || m.lng !== e.lng)) runsWithHotel.push([m, e])
+    }
 
     const straightLines = (): [number, number][][] =>
       runsWithHotel.map(r => r.map(p => [p.lat, p.lng] as [number, number]))
@@ -277,7 +312,7 @@ export function useRouteCalculation(
       // Aborted (day changed) — newer call owns the state. Anything else: keep straight lines.
       if (!(err instanceof Error) || err.name !== 'AbortError') setRouteSegments([])
     }
-  }, [enabled, profile, accommodations, optimizeFromAccommodation, provider, optimism, scheduleMarginMinutes, avoidTolls, avoidHighways, avoidFerries])
+  }, [enabled, profile, accommodations, optimizeFromAccommodation, provider, optimism, scheduleMarginMinutes, avoidTolls, avoidHighways, avoidFerries, distanceUnit])
 
   // Stable signature for transport reservations on the selected day — changes when a transport
   // is added, removed, or repositioned, ensuring route recalc fires even on transport-only reorders.
@@ -301,7 +336,7 @@ export function useRouteCalculation(
     if (!selectedDayId) { setRoute(null); setRouteSegments([]); return }
     updateRouteForDay(selectedDayId)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDayId, selectedDayAssignments, transportSignature, enabled, profile, accommodations, optimizeFromAccommodation, provider, optimism, scheduleMarginMinutes, avoidTolls, avoidHighways, avoidFerries, routeChoiceVersion])
+  }, [selectedDayId, selectedDayAssignments, transportSignature, enabled, profile, accommodations, optimizeFromAccommodation, provider, optimism, scheduleMarginMinutes, avoidTolls, avoidHighways, avoidFerries, distanceUnit, routeChoiceVersion])
 
   return { route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay }
 }

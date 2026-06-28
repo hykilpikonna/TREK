@@ -1,5 +1,7 @@
-import type { RouteAlternative, RouteResult, RouteSegment, RouteStep, RouteTransitStop, RouteWithLegs, Waypoint, RouteAnchors } from '../../types'
+import { useSettingsStore } from '../../store/settingsStore'
+import type { DistanceUnit, RouteAlternative, RouteResult, RouteSegment, RouteStep, RouteTransitStop, RouteWithLegs, Waypoint, RouteAnchors } from '../../types'
 import { apiClient } from '../../api/client'
+import { formatDistance as formatUnitDistance } from '../../utils/units'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1'
 
@@ -302,7 +304,7 @@ export async function calculateRoute(
     coordinates,
     distance,
     duration,
-    distanceText: formatDistance(distance),
+    distanceText: formatRouteDistance(distance),
     durationText: formatDuration(duration),
     walkingText: formatDuration(walkingDuration),
     drivingText: formatDuration(drivingDuration),
@@ -460,7 +462,7 @@ export async function calculateSegments(
       duration: leg.duration,
       walkingText: formatDuration(walkingDuration),
       drivingText: formatDuration(leg.duration),
-      distanceText: formatDistance(leg.distance),
+      distanceText: formatRouteDistance(leg.distance),
     }
   })
 }
@@ -497,11 +499,12 @@ export async function calculateRouteWithLegs(
   const effectiveProvider: RoutingProvider = profile === 'transit' && provider === 'osrm' ? 'google_maps' : provider
   const boundedOptimism = normalizeOptimism(optimism)
   const googleOptionsKey = googleOptionsCacheKey(google)
+  const distanceUnit = getDistanceUnit()
   const cacheKey = effectiveProvider === 'google_maps'
-    ? `${effectiveProvider}:${profile}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
+    ? `${effectiveProvider}:${profile}:${distanceUnit}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
     : effectiveProvider === 'google_maps_mobile'
-      ? `${effectiveProvider}:${profile}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
-      : `${effectiveProvider}:${profile}:${coords}`
+      ? `${effectiveProvider}:${profile}:${distanceUnit}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
+      : `${effectiveProvider}:${profile}:${distanceUnit}:${coords}`
   const cached = routeCache.get(cacheKey)
   if (cached && !hasIncompleteTransitDetails(cached, profile)) return applyPersistedRouteChoices(cached)
   const persisted = getPersistedRoute(cacheKey)
@@ -555,7 +558,7 @@ export async function calculateRouteWithLegs(
         duration: leg.duration,
         walkingText: formatDuration(walkingDuration),
         drivingText: formatDuration(leg.duration),
-        distanceText: formatDistance(leg.distance),
+        distanceText: formatRouteDistance(leg.distance),
         durationText: formatDuration(leg.duration),
       }
     }
@@ -960,7 +963,7 @@ function googleRouteAlternative(
     duration,
     walkingText,
     drivingText: durationText,
-    distanceText: route.distance?.text ?? formatDistance(distance),
+    distanceText: route.distance?.text ?? formatRouteDistance(distance),
     durationText,
     ...(fareText ? { fareText } : {}),
     ...(steps.length ? { steps } : {}),
@@ -987,7 +990,7 @@ function googleMobileRouteAlternative(
     duration,
     walkingText: durationText,
     drivingText: durationText,
-    distanceText: route.distance?.text ?? formatDistance(distance),
+    distanceText: route.distance?.text ?? formatRouteDistance(distance),
     durationText,
     ...(tollText ? { tollText } : {}),
     coordinates: coordinatesFromGeometry(route.overviewGeometry, from, to),
@@ -1208,11 +1211,16 @@ async function calculateGoogleMobileRouteWithLegs(
   }
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 1000) {
+function getDistanceUnit(): DistanceUnit {
+  return useSettingsStore.getState().settings.distance_unit === 'imperial' ? 'imperial' : 'metric'
+}
+
+function formatRouteDistance(meters: number): string {
+  const unit = getDistanceUnit()
+  if (unit === 'metric' && meters < 1000) {
     return `${Math.round(meters)} m`
   }
-  return `${(meters / 1000).toFixed(1)} km`
+  return formatUnitDistance(meters / 1000, unit)
 }
 
 function formatDuration(seconds: number): string {

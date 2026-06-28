@@ -8,6 +8,7 @@ const MASKED_SETTING_KEYS = new Set(['webhook_url', 'ntfy_token']);
 
 export const DEFAULTABLE_USER_SETTING_KEYS = [
   'temperature_unit',
+  'distance_unit',
   'dark_mode',
   'time_format',
   // Instance-wide default currency for Costs (new users inherit it until they
@@ -20,6 +21,7 @@ export const DEFAULTABLE_USER_SETTING_KEYS = [
   'map_provider',
   'mapbox_access_token',
   'mapbox_style',
+  'maplibre_style',
   'mapbox_3d_enabled',
   'mapbox_quality_mode',
 ] as const;
@@ -28,6 +30,7 @@ type DefaultableKey = typeof DEFAULTABLE_USER_SETTING_KEYS[number];
 
 const VALID_VALUES: Partial<Record<DefaultableKey, unknown[]>> = {
   temperature_unit: ['fahrenheit', 'celsius'],
+  distance_unit: ['metric', 'imperial'],
   time_format: ['12h', '24h'],
   dark_mode: [true, false, 'light', 'dark', 'auto'],
   map_provider: ['leaflet', 'mapbox-gl', 'maplibre-gl'],

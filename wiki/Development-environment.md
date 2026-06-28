@@ -83,22 +83,10 @@ npm ci
 
 The booking-confirmation import feature uses [KDE KItinerary](https://apps.kde.org/itinerary/) to parse travel documents. The server works without it, but the import endpoint will be non-functional.
 
-### Linux — amd64
-
-Download the static binary from the KDE CDN and verify the checksum:
-
-```bash
-wget -qO /tmp/ki.tgz https://cdn.kde.org/ci-builds/pim/kitinerary/release-26.04/linux/kitinerary-extractor-x86_64-26.04.0.tgz
-echo "b7058d98990053c7b61847fef0c21e02d59b60e323e2b171ca210b682334e801  /tmp/ki.tgz" | sha256sum -c
-sudo tar -xz -C /usr/local -f /tmp/ki.tgz bin/kitinerary-extractor share/locale
-rm /tmp/ki.tgz
-```
-
-### Linux — arm64
+### Linux
 
 ```bash
 sudo apt-get install -y libkitinerary-bin
-sudo ln -sf "$(find /usr/lib -name kitinerary-extractor -type f | head -1)" /usr/local/bin/kitinerary-extractor
 ```
 
 ### Environment variables
@@ -148,41 +136,13 @@ The `@trek/shared` package is the single source of truth for code shared between
 | `npm run build`             | Compile shared package (tsup)        |
 | `npm run build:watch`       | Compile in watch mode                |
 | `npm test`                  | Run tests                            |
+| `npm run test:watch`        | Run tests in watch mode              |
 | `npm run typecheck`         | Type-check without emitting          |
 | `npm run i18n:parity`       | Check locale key parity              |
 | `npm run i18n:parity:strict`| Strict locale key parity (CI gate)   |
 | `npm run lint`              | Lint source                          |
 | `npm run format`            | Format source                        |
-
-### Root (`/`)
-
-These commands run across all workspaces at once and are the recommended way to work:
-
-| Command              | Description                                                         |
-|----------------------|---------------------------------------------------------------------|
-| `npm run dev`        | Build shared, then start shared (watch), server, and client together via `concurrently` |
-| `npm run build`      | Build shared → server → client in order                            |
-| `npm test`           | Run tests in shared, server, and client                            |
-| `npm run test:cov`   | Run coverage for server and client                                 |
-| `npm run test:e2e`   | Run end-to-end tests (server)                                      |
-| `npm run lint`       | Lint shared, server, and client                                    |
-| `npm run format`     | Format shared, server, and client                                  |
-| `npm run format:check` | Check formatting across all workspaces                           |
-
-### Shared (`/shared`)
-
-The `@trek/shared` package is the single source of truth for code shared between the client and server. It currently holds **Zod schemas that define API contracts** (request/response shapes, common primitives, pagination). Both workspaces import from it so schema changes automatically propagate to both sides.
-
-> **Upcoming:** the i18n translation layer will be migrated into this package so that translation keys and types are enforced across the stack from one place.
-
-| Command                | Description                        |
-|------------------------|------------------------------------|
-| `npm run build`        | Compile shared package (tsup)      |
-| `npm run build:watch`  | Compile in watch mode              |
-| `npm test`             | Run tests                          |
-| `npm run typecheck`    | Type-check without emitting        |
-| `npm run lint`         | Lint source                        |
-| `npm run format`       | Format source                      |
+| `npm run format:check`   | Check formatting                  |
 
 ### Server (`/server`)
 

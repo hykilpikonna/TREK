@@ -136,6 +136,12 @@ function styleForProvider(provider: Provider, style?: string | null): string {
   return normalizeStyleForProvider(provider, style)
 }
 
+// Each GL provider has its own style slot, so toggling providers never clobbers the
+// other one's style. Leaflet/Mapbox use mapbox_style; MapLibre uses maplibre_style.
+function slotStyle(provider: Provider, s: { mapbox_style?: string; maplibre_style?: string }): string | undefined {
+  return provider === 'maplibre-gl' ? s.maplibre_style : s.mapbox_style
+}
+
 export default function MapSettingsTab(): React.ReactElement {
   const { settings, updateSettings } = useSettingsStore()
   const { t } = useTranslation()
@@ -145,7 +151,7 @@ export default function MapSettingsTab(): React.ReactElement {
   const [provider, setProvider] = useState<Provider>(initialProvider)
   const [mapTileUrl, setMapTileUrl] = useState<string>(settings.map_tile_url || '')
   const [mapboxToken, setMapboxToken] = useState<string>(settings.mapbox_access_token || '')
-  const [mapboxStyle, setMapboxStyle] = useState<string>(styleForProvider(initialProvider, settings.mapbox_style))
+  const [mapboxStyle, setMapboxStyle] = useState<string>(styleForProvider(initialProvider, slotStyle(initialProvider, settings)))
   const [mapbox3d, setMapbox3d] = useState<boolean>(settings.mapbox_3d_enabled !== false)
   const [mapboxQuality, setMapboxQuality] = useState<boolean>(settings.mapbox_quality_mode === true)
   const [defaultLat, setDefaultLat] = useState<number | string>(settings.default_lat || 48.8566)
@@ -157,7 +163,7 @@ export default function MapSettingsTab(): React.ReactElement {
     setProvider(nextProvider)
     setMapTileUrl(settings.map_tile_url || '')
     setMapboxToken(settings.mapbox_access_token || '')
-    setMapboxStyle(styleForProvider(nextProvider, settings.mapbox_style))
+    setMapboxStyle(styleForProvider(nextProvider, slotStyle(nextProvider, settings)))
     setMapbox3d(settings.mapbox_3d_enabled !== false)
     setMapboxQuality(settings.mapbox_quality_mode === true)
     setDefaultLat(settings.default_lat || 48.8566)
@@ -194,11 +200,13 @@ export default function MapSettingsTab(): React.ReactElement {
     try {
       const glStyle = provider === 'leaflet' ? mapboxStyle : normalizeStyleForProvider(provider, mapboxStyle)
       setMapboxStyle(glStyle)
+      // Save into the active provider's own slot so the other provider's style survives.
+      const stylePatch = provider === 'maplibre-gl' ? { maplibre_style: glStyle } : { mapbox_style: glStyle }
       await updateSettings({
         map_provider: provider,
         map_tile_url: mapTileUrl,
         mapbox_access_token: mapboxToken,
-        mapbox_style: glStyle,
+        ...stylePatch,
         mapbox_3d_enabled: mapbox3d,
         mapbox_quality_mode: mapboxQuality,
         default_lat: parseFloat(String(defaultLat)),
@@ -218,7 +226,9 @@ export default function MapSettingsTab(): React.ReactElement {
   const supports3d = true
   const changeProvider = (nextProvider: Provider) => {
     setProvider(nextProvider)
-    if (nextProvider !== 'leaflet') setMapboxStyle(styleForProvider(nextProvider, mapboxStyle))
+    if (nextProvider !== 'leaflet') {
+      setMapboxStyle(styleForProvider(nextProvider, slotStyle(nextProvider, settings)))
+    }
   }
 
   return (

@@ -100,6 +100,8 @@ export interface TripFile {
   url: string
 }
 
+export type DistanceUnit = 'metric' | 'imperial'
+
 export interface Settings {
   map_tile_url: string
   default_lat: number
@@ -109,6 +111,7 @@ export interface Settings {
   default_currency: string
   language: string
   temperature_unit: string
+  distance_unit?: DistanceUnit
   time_format: string
   show_place_description: boolean
   blur_booking_codes?: boolean
@@ -118,8 +121,13 @@ export interface Settings {
   map_provider?: 'leaflet' | 'mapbox-gl' | 'maplibre-gl'
   mapbox_access_token?: string
   mapbox_style?: string
+  maplibre_style?: string
   mapbox_3d_enabled?: boolean
   mapbox_quality_mode?: boolean
+  // Dashboard widget prefs — persisted server-side so a (docker) upgrade keeps them (#1311).
+  dashboard_fx_from?: string
+  dashboard_fx_to?: string
+  dashboard_timezones?: string[]
 }
 
 export interface AssignmentsMap {
