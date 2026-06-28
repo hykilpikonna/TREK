@@ -5,6 +5,12 @@ import type { Request } from 'express';
 vi.mock('../../../src/services/auditLog', () => ({ writeAudit: vi.fn(), getClientIp: vi.fn(() => '1.2.3.4'), logInfo: vi.fn() }));
 const { isDemoEmail } = vi.hoisted(() => ({ isDemoEmail: vi.fn(() => false) }));
 vi.mock('../../../src/services/demo', () => ({ isDemoEmail }));
+// Mock the Unsplash cover internalisation so the controller test never hits the
+// network; isUnsplashCoverUrl keeps its real (host-based) logic.
+vi.mock('../../../src/services/unsplashService', () => ({
+  isUnsplashCoverUrl: (v: unknown) => typeof v === 'string' && v.startsWith('https://images.unsplash.com/'),
+  saveUnsplashCover: vi.fn().mockResolvedValue('mock-cover.jpg'),
+}));
 
 import { TripsController } from '../../../src/nest/trips/trips.controller';
 import type { TripsService } from '../../../src/nest/trips/trips.service';
@@ -26,6 +32,15 @@ function svc(o: Partial<TripsService> = {}): TripsService {
 
 function thrown(fn: () => unknown): { status: number; body: unknown } {
   try { fn(); } catch (err) {
+    expect(err).toBeInstanceOf(HttpException);
+    const e = err as HttpException;
+    return { status: e.getStatus(), body: e.getResponse() };
+  }
+  throw new Error('expected throw');
+}
+
+async function thrownAsync(fn: () => Promise<unknown>): Promise<{ status: number; body: unknown }> {
+  try { await fn(); } catch (err) {
     expect(err).toBeInstanceOf(HttpException);
     const e = err as HttpException;
     return { status: e.getStatus(), body: e.getResponse() };
@@ -97,57 +112,68 @@ describe('TripsController (parity with the legacy /api/trips route)', () => {
   });
 
   describe('PUT /:id', () => {
-    it('404 when no access; 403 on archive without trip_archive', () => {
-      expect(thrown(() => new TripsController(svc({ canAccessTrip: vi.fn().mockReturnValue(undefined) })).update(user, '9', {}, req))).toEqual({ status: 404, body: { error: 'Trip not found' } });
+    it('404 when no access; 403 on archive without trip_archive', async () => {
+      expect(await thrownAsync(() => new TripsController(svc({ canAccessTrip: vi.fn().mockReturnValue(undefined) })).update(user, '9', {}, req))).toEqual({ status: 404, body: { error: 'Trip not found' } });
       const s = svc({ can: vi.fn().mockImplementation((a: string) => a !== 'trip_archive') });
-      expect(thrown(() => new TripsController(s).update(user, '9', { is_archived: 1 }, req))).toEqual({ status: 403, body: { error: 'No permission to archive/unarchive this trip' } });
+      expect(await thrownAsync(() => new TripsController(s).update(user, '9', { is_archived: 1 }, req))).toEqual({ status: 403, body: { error: 'No permission to archive/unarchive this trip' } });
     });
 
-    it('updates, audits a change and broadcasts', () => {
+    it('updates, audits a change and broadcasts', async () => {
       const update = vi.fn().mockReturnValue({ updatedTrip: { id: 9 }, changes: { title: { oldValue: 'a', newValue: 'b' } }, newTitle: 'b', newReminder: 0, oldReminder: 0 });
       const broadcast = vi.fn();
       const s = svc({ update, broadcast } as Partial<TripsService>);
-      expect(new TripsController(s).update(user, '9', { title: 'b' }, req, 'sock')).toEqual({ trip: { id: 9 } });
+      expect(await new TripsController(s).update(user, '9', { title: 'b' }, req, 'sock')).toEqual({ trip: { id: 9 } });
       expect(broadcast).toHaveBeenCalledWith('9', 'trip:updated', { trip: { id: 9 } }, 'sock');
     });
 
-    it('403 on cover_image without trip_cover_upload', () => {
+    it('403 on cover_image without trip_cover_upload', async () => {
       const s = svc({ can: vi.fn().mockImplementation((a: string) => a !== 'trip_cover_upload') });
-      expect(thrown(() => new TripsController(s).update(user, '9', { cover_image: '/x.jpg' }, req))).toEqual({ status: 403, body: { error: 'No permission to change cover image' } });
+      expect(await thrownAsync(() => new TripsController(s).update(user, '9', { cover_image: '/x.jpg' }, req))).toEqual({ status: 403, body: { error: 'No permission to change cover image' } });
     });
 
-    it('403 on an edit field without trip_edit', () => {
+    it('403 on an edit field without trip_edit', async () => {
       const s = svc({ can: vi.fn().mockImplementation((a: string) => a !== 'trip_edit') });
-      expect(thrown(() => new TripsController(s).update(user, '9', { title: 'b' }, req))).toEqual({ status: 403, body: { error: 'No permission to edit this trip' } });
+      expect(await thrownAsync(() => new TripsController(s).update(user, '9', { title: 'b' }, req))).toEqual({ status: 403, body: { error: 'No permission to edit this trip' } });
     });
 
-    it('admin edit logs the owner and reminder changes', () => {
+    it('admin edit logs the owner and reminder changes', async () => {
       const update = vi.fn().mockReturnValue({
         updatedTrip: { id: 9 }, changes: { title: { oldValue: 'a', newValue: 'b' } }, newTitle: 'b',
         ownerEmail: 'owner@x.y', isAdminEdit: true, newReminder: 5, oldReminder: 0,
       });
       const s = svc({ update } as Partial<TripsService>);
-      expect(new TripsController(s).update(user, '9', { title: 'b' }, req)).toEqual({ trip: { id: 9 } });
+      expect(await new TripsController(s).update(user, '9', { title: 'b' }, req)).toEqual({ trip: { id: 9 } });
     });
 
-    it('logs when a reminder is removed', () => {
+    it('logs when a reminder is removed', async () => {
       const update = vi.fn().mockReturnValue({
         updatedTrip: { id: 9 }, changes: {}, newTitle: 'b', newReminder: 0, oldReminder: 5,
       });
       const s = svc({ update } as Partial<TripsService>);
-      expect(new TripsController(s).update(user, '9', { reminder_days: 0 }, req)).toEqual({ trip: { id: 9 } });
+      expect(await new TripsController(s).update(user, '9', { reminder_days: 0 }, req)).toEqual({ trip: { id: 9 } });
     });
 
-    it('maps a NotFoundError to 404 and a ValidationError to 400', () => {
+    it('maps a NotFoundError to 404 and a ValidationError to 400', async () => {
       const nf = svc({ update: vi.fn().mockImplementation(() => { throw new NotFoundError('gone'); }) } as Partial<TripsService>);
-      expect(thrown(() => new TripsController(nf).update(user, '9', { title: 'b' }, req))).toEqual({ status: 404, body: { error: 'gone' } });
+      expect(await thrownAsync(() => new TripsController(nf).update(user, '9', { title: 'b' }, req))).toEqual({ status: 404, body: { error: 'gone' } });
       const ve = svc({ update: vi.fn().mockImplementation(() => { throw new ValidationError('bad'); }) } as Partial<TripsService>);
-      expect(thrown(() => new TripsController(ve).update(user, '9', { title: 'b' }, req))).toEqual({ status: 400, body: { error: 'bad' } });
+      expect(await thrownAsync(() => new TripsController(ve).update(user, '9', { title: 'b' }, req))).toEqual({ status: 400, body: { error: 'bad' } });
     });
 
-    it('re-throws an unknown error from update', () => {
+    it('re-throws an unknown error from update', async () => {
       const s = svc({ update: vi.fn().mockImplementation(() => { throw new Error('boom'); }) } as Partial<TripsService>);
-      expect(() => new TripsController(s).update(user, '9', { title: 'b' }, req)).toThrow('boom');
+      await expect(new TripsController(s).update(user, '9', { title: 'b' }, req)).rejects.toThrow('boom');
+    });
+
+    it('#1277: internalises an Unsplash cover hot-link into uploads/covers before saving', async () => {
+      const update = vi.fn().mockReturnValue({ updatedTrip: { id: 9 }, changes: {}, newTitle: 'b', newReminder: 0, oldReminder: 0 });
+      const deleteOldCover = vi.fn();
+      const s = svc({ update, deleteOldCover, getRaw: vi.fn().mockReturnValue({ cover_image: null }) } as Partial<TripsService>);
+      await new TripsController(s).update(user, '9', { cover_image: 'https://images.unsplash.com/photo-123?w=1080' }, req);
+      // The handler downloads the cover and rewrites cover_image to a local path
+      // before delegating to update(); on download failure it would have thrown 502.
+      const savedBody = update.mock.calls[0][2] as { cover_image: string };
+      expect(savedBody.cover_image).toMatch(/^\/uploads\/covers\/.+\.(jpg|png|webp|gif)$/);
     });
   });
 
