@@ -44,6 +44,25 @@ function routeSecondsToMinutes(seconds?: number | null): number {
   return Number.isFinite(n) && n > 0 ? Math.round(n / 60) : 0
 }
 
+type RoutePoint = { lat: number; lng: number; label?: string | null }
+
+function routeErrorSegment(a: RoutePoint, b: RoutePoint, errorText: string): RouteSegment {
+  const from: [number, number] = [a.lat, a.lng]
+  const to: [number, number] = [b.lat, b.lng]
+  return {
+    from,
+    to,
+    mid: [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2],
+    distance: 0,
+    duration: 0,
+    walkingText: '',
+    drivingText: '',
+    distanceText: '',
+    durationText: '',
+    errorText,
+  }
+}
+
 type DayPlanView = 'list' | 'calendar'
 type PlannerRouteProfile = Extract<RouteProfile, 'driving' | 'walking' | 'transit'>
 
@@ -132,7 +151,37 @@ function setOpeningDetailsSessionCache(key: string, value: PlaceOpeningDetails |
 }
 
 function openingDetailIdForPlace(place?: Pick<Place, 'google_ftid' | 'google_place_id' | 'osm_id'> | null): string | null {
-  return place?.google_ftid || place?.google_place_id || place?.osm_id || null
+  return place?.google_place_id || place?.google_ftid || place?.osm_id || null
+}
+
+function cleanPlanText(value?: string | null): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function samePlanText(left?: string | null, right?: string | null): boolean {
+  const a = cleanPlanText(left)
+  const b = cleanPlanText(right)
+  return Boolean(a && b && a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0)
+}
+
+function originalPlaceName(place: Pick<Place, 'name'>, details?: PlaceOpeningDetails | null): string | null {
+  const original = cleanPlanText(details?.name_original)
+  if (!original) return null
+  if (samePlanText(original, place.name) || samePlanText(original, details?.name_translated) || samePlanText(original, details?.name)) return null
+  return original
+}
+
+function placeSubtext(place: Pick<Place, 'name' | 'description' | 'address'>, category?: Category, details?: PlaceOpeningDetails | null): string {
+  const primary = cleanPlanText(place.description) || cleanPlanText(place.address)
+  const original = originalPlaceName(place, details)
+  const categoryName = cleanPlanText(category?.name)
+  const parts: string[] = []
+  for (const part of [primary, original, categoryName]) {
+    if (!part) continue
+    if (parts.some(existing => samePlanText(existing, part))) continue
+    parts.push(part)
+  }
+  return parts.join(' · ')
 }
 
 function useOpeningDetailsByPlace(assignments: AssignmentsMap, language: string): Record<number, PlaceOpeningDetails | null> {
@@ -157,7 +206,7 @@ function useOpeningDetailsByPlace(assignments: AssignmentsMap, language: string)
     }
 
     let cancelled = false
-    const cachePrefix = `opening_details_${language || 'en'}_`
+    const cachePrefix = `opening_details_v5_${language || 'en'}_`
     const requestedDetailIdsByPlaceId = new Map(requests.map(request => [request.placeId, request.detailId]))
 
     setDetailEntriesByPlaceId(prev => {
@@ -772,9 +821,12 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
         avoidFerries: normalizeRoutingAvoidFlag(trip?.routing_avoid_ferries),
       }
       const scheduleMarginMinutes = Math.max(0, Math.round(Number(trip?.schedule_margin_minutes) || 0))
+      const routeTravelMinutes = (seg: RouteSegment | null | undefined) => (
+        seg?.errorText ? 0 : routeSecondsToMinutes(seg?.duration)
+      )
       const legBetween = async (
-        a: { lat: number; lng: number },
-        b: { lat: number; lng: number },
+        a: RoutePoint,
+        b: RoutePoint,
         departureLocalDateTime?: string | null,
       ): Promise<RouteSegment | undefined> => {
         try {
@@ -789,7 +841,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
           return r.legs[0]
         } catch (err) {
           if (err instanceof Error && err.name === 'AbortError') throw err
-          return undefined
+          return routeErrorSegment(a, b, t('dayplan.routeError'))
         }
       }
 
@@ -799,10 +851,10 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
         const bookends = optimizeFromAccommodation !== false ? getDayBookendHotels(day, days, accommodations) : null
         const startHotel = bookends?.morning
         const endHotel = bookends?.evening
-        const wayPts: { lat: number; lng: number; isPlace: boolean }[] = []
+        const wayPts: Array<RoutePoint & { isPlace: boolean }> = []
         for (const it of merged) {
           if (it.type === 'place' && it.data.place?.lat && it.data.place?.lng) {
-            wayPts.push({ lat: it.data.place.lat, lng: it.data.place.lng, isPlace: true })
+            wayPts.push({ lat: it.data.place.lat, lng: it.data.place.lng, label: it.data.place.name ?? null, isPlace: true })
           } else if (it.type === 'transport') {
             const { from, to } = getTransportRouteEndpoints(it.data, day.id)
             if (from) wayPts.push({ lat: from.lat, lng: from.lng, isPlace: false })
@@ -820,32 +872,34 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
         if (routeProvider === 'google_maps' || routeProvider === 'google_maps_mobile') {
           let cursor = parseTimeToMinutes(day.wake_up_time || DEFAULT_WAKE_UP_TIME) ?? parseTimeToMinutes(DEFAULT_WAKE_UP_TIME)!
           const timedLeg = async (
-            a: { lat: number; lng: number },
-            b: { lat: number; lng: number },
+            a: RoutePoint,
+            b: RoutePoint,
             departureMinutes: number,
           ) => legBetween(a, b, localDateTimeForDayMinute(day, departureMinutes))
 
           if (wantTop && startHotel && firstWay) {
             const seg = await timedLeg(
-              { lat: startHotel.place_lat as number, lng: startHotel.place_lng as number },
-              { lat: firstWay.lat, lng: firstWay.lng },
+              { lat: startHotel.place_lat as number, lng: startHotel.place_lng as number, label: hotelName(startHotel) },
+              { lat: firstWay.lat, lng: firstWay.lng, label: firstWay.label },
               cursor,
             )
             if (seg) {
               hotel.top = { seg, name: hotelName(startHotel) }
-              cursor += routeSecondsToMinutes(seg.duration) + scheduleMarginMinutes
+              const travelMinutes = routeTravelMinutes(seg)
+              if (travelMinutes > 0) cursor += travelMinutes + scheduleMarginMinutes
             }
           }
 
-          let current: { id: number; lat: number; lng: number } | null = null
+          let current: ({ id: number } & RoutePoint) | null = null
           for (const it of merged) {
             if (it.type === 'place' && it.data.place?.lat && it.data.place?.lng) {
-              const next = { id: it.data.id, lat: it.data.place.lat, lng: it.data.place.lng }
+              const next = { id: it.data.id, lat: it.data.place.lat, lng: it.data.place.lng, label: it.data.place.name ?? null }
               if (current) {
                 const seg = await timedLeg(current, next, cursor)
                 if (seg) {
                   map[current.id] = seg
-                  cursor += routeSecondsToMinutes(seg.duration) + scheduleMarginMinutes
+                  const travelMinutes = routeTravelMinutes(seg)
+                  if (travelMinutes > 0) cursor += travelMinutes + scheduleMarginMinutes
                 }
               }
               cursor += normalizeDurationMinutes(it.data.duration_minutes ?? it.data.place.duration_minutes) + scheduleMarginMinutes
@@ -858,7 +912,8 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
                   const seg = await timedLeg(current, { lat: from.lat, lng: from.lng }, cursor)
                   if (seg) {
                     map[current.id] = seg
-                    cursor += routeSecondsToMinutes(seg.duration) + scheduleMarginMinutes
+                    const travelMinutes = routeTravelMinutes(seg)
+                    if (travelMinutes > 0) cursor += travelMinutes + scheduleMarginMinutes
                   }
                 }
                 current = null
@@ -872,15 +927,15 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
           }
 
           if (wantBottom && endHotel && current) {
-            const seg = await timedLeg(current, { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number }, cursor)
+            const seg = await timedLeg(current, { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number, label: hotelName(endHotel) }, cursor)
             if (seg) hotel.bottom = { seg, name: hotelName(endHotel) }
           }
         } else {
-          const runs: { id: number; lat: number; lng: number }[][] = []
-          let cur: { id: number; lat: number; lng: number }[] = []
+          const runs: Array<Array<{ id: number } & RoutePoint>> = []
+          let cur: Array<{ id: number } & RoutePoint> = []
           for (const it of merged) {
             if (it.type === 'place' && it.data.place?.lat && it.data.place?.lng) {
-              cur.push({ id: it.data.id, lat: it.data.place.lat, lng: it.data.place.lng })
+              cur.push({ id: it.data.id, lat: it.data.place.lat, lng: it.data.place.lng, label: it.data.place.name ?? null })
             } else if (it.type === 'transport') {
               const r = it.data
               const { from, to } = getTransportRouteEndpoints(r, day.id)
@@ -900,7 +955,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
 
           for (const run of runs) {
             try {
-              const r = await calculateRouteWithLegs(run.map(p => ({ lat: p.lat, lng: p.lng })), {
+              const r = await calculateRouteWithLegs(run.map(p => ({ lat: p.lat, lng: p.lng, label: p.label })), {
                 signal: controller.signal,
                 profile: routeProfile,
                 provider: routeProvider,
@@ -909,15 +964,24 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
               r.legs.forEach((leg, i) => { map[run[i].id] = leg })
             } catch (err) {
               if (err instanceof Error && err.name === 'AbortError') return
+              for (let i = 0; i < run.length - 1; i++) {
+                map[run[i].id] = routeErrorSegment(run[i], run[i + 1], t('dayplan.routeError'))
+              }
             }
           }
 
           if (wantTop && startHotel && firstWay) {
-            const seg = await legBetween({ lat: startHotel.place_lat as number, lng: startHotel.place_lng as number }, { lat: firstWay.lat, lng: firstWay.lng })
+            const seg = await legBetween(
+              { lat: startHotel.place_lat as number, lng: startHotel.place_lng as number, label: hotelName(startHotel) },
+              { lat: firstWay.lat, lng: firstWay.lng, label: firstWay.label },
+            )
             if (seg) hotel.top = { seg, name: hotelName(startHotel) }
           }
           if (wantBottom && endHotel && lastWay) {
-            const seg = await legBetween({ lat: lastWay.lat, lng: lastWay.lng }, { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number })
+            const seg = await legBetween(
+              { lat: lastWay.lat, lng: lastWay.lng, label: lastWay.label },
+              { lat: endHotel.place_lat as number, lng: endHotel.place_lng as number, label: hotelName(endHotel) },
+            )
             if (seg) hotel.bottom = { seg, name: hotelName(endHotel) }
           }
         }
@@ -937,7 +1001,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
       }
     })
     return () => controller.abort()
-  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes, routeChoiceVersion, distanceUnit])
+  }, [routeShown, routeProfile, mergedItemsMap, accommodations, days, optimizeFromAccommodation, trip?.routing_provider, trip?.routing_optimism, trip?.routing_avoid_tolls, trip?.routing_avoid_highways, trip?.routing_avoid_ferries, trip?.schedule_margin_minutes, routeChoiceVersion, distanceUnit, t])
 
   const openAddNote = (dayId, e) => {
     e?.stopPropagation()
@@ -2398,14 +2462,16 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                             const displayEnd = durationMinutes === slot.durationMinutes
                               ? slot.end
                               : minutesToClock((parseTimeToMinutes(slot.start) ?? 0) + durationMinutes)
+                            const placeDetails = openingDetailsByPlaceId[place.id]
                             const openingWarning = getOpeningHoursWarning(
-                              openingDetailsByPlaceId[place.id],
+                              placeDetails,
                               day.date,
                               slot.start,
                               displayEnd,
                               (clock) => formatTime(clock, locale, timeFormat),
                             )
                             const openingWarningText = openingWarning ? openingWarningMessage(openingWarning) : ''
+                            const subtext = placeSubtext(place, cat, placeDetails)
                             return (
                               <div
                                 key={assignment.id}
@@ -2475,9 +2541,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                     {place.name}
                                   </div>
                                   {openingWarning && heightPx >= 58 && <OpeningWarningBadge warning={openingWarning} compact />}
-                                  {(place.address || cat?.name) && heightPx >= 42 && (
+                                  {subtext && heightPx >= 42 && (
                                     <div className="text-content-faint" style={{ marginTop: 2, fontSize: 10, lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {place.address || cat?.name}
+                                      {subtext}
                                     </div>
                                   )}
                                 </div>
@@ -2538,13 +2604,15 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                         const isDraggingThis = draggingId === assignment.id
                         const placeIdx = placeItems.findIndex(i => i.data.id === assignment.id)
                         const slot = activitySchedule[assignment.id]
-                        const openingWarning = slot ? getOpeningHoursWarning(
-                          openingDetailsByPlaceId[place.id],
+                        const placeDetails = openingDetailsByPlaceId[place.id]
+                        const openingWarning = getOpeningHoursWarning(
+                          placeDetails,
                           day.date,
-                          slot.start,
-                          slot.end,
+                          slot?.start ?? null,
+                          slot?.end ?? null,
                           (clock) => formatTime(clock, locale, timeFormat),
-                        ) : null
+                        )
+                        const subtext = placeSubtext(place, cat, placeDetails)
 
                         const arrowMove = (direction: 'up' | 'down') => {
                           const m = getMergedItems(day.id)
@@ -2718,9 +2786,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                   </span>
                                 )}
                               </div>
-                              {(place.description || place.address || cat?.name) && (
+                              {subtext && (
                                 <div className="collab-note-md" style={{ marginTop: 2, fontSize: 10, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2, maxHeight: '1.2em' }}>
-                                  <Markdown remarkPlugins={[remarkGfm]}>{place.description || place.address || cat?.name || ''}</Markdown>
+                                  <Markdown remarkPlugins={[remarkGfm]}>{subtext}</Markdown>
                                 </div>
                               )}
                               {openingWarning && <OpeningWarningBadge warning={openingWarning} />}
