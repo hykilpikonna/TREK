@@ -63,6 +63,8 @@ const settings: TranslationStrings = {
   'settings.mapPoiPill': 'Explore places on the map',
   'settings.mapPoiPillHint':
     'Show a category pill on the trip map to find nearby restaurants, hotels and more from OpenStreetMap.',
+  'settings.mapIconGrouping': 'Group map icons',
+  'settings.mapIconGroupingHint': 'Combine nearby place icons into clusters when the map is zoomed out.',
   'settings.blurBookingCodes': 'Blur Booking Codes',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { resetAllStores } from '../../../tests/helpers/store'
 import { buildPlace } from '../../../tests/helpers/factories'
 import * as photoService from '../../services/photoService'
+import { useSettingsStore } from '../../store/settingsStore'
 
 const mapMock = vi.hoisted(() => ({
   panTo: vi.fn(),
@@ -154,6 +155,19 @@ describe('MapView', () => {
     const places = [buildMapPlace({ lat: 48.8584, lng: 2.2945 })]
     render(<MapView places={places} />)
     expect(screen.getByTestId('cluster-group')).toBeTruthy()
+  })
+
+  it('FE-COMP-MAPVIEW-021: does not render MarkerClusterGroup when icon grouping is disabled', () => {
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        map_icon_grouping_enabled: false,
+      },
+    } as any)
+    const places = [buildMapPlace({ lat: 48.8584, lng: 2.2945 })]
+    render(<MapView places={places} />)
+    expect(screen.queryByTestId('cluster-group')).toBeNull()
+    expect(screen.getByTestId('marker')).toBeTruthy()
   })
 
   it('FE-COMP-MAPVIEW-011: renders the route polyline; travel times are no longer drawn on the map', () => {

@@ -303,6 +303,7 @@ function MapContextMenuHandler({ onContextMenu }: { onContextMenu: ((e: L.Leafle
 // Module-level photo cache shared with PlaceAvatar
 import { getCached, isLoading, fetchPhoto, onThumbReady, getAllThumbs } from '../../services/photoService'
 import { useAuthStore } from '../../store/authStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import LocationButton from './LocationButton'
 
@@ -432,6 +433,7 @@ export const MapView = memo(function MapView({
   onPoiClick,
   onViewportChange,
 }: any) {
+  const markerGroupingEnabled = useSettingsStore(s => s.settings.map_icon_grouping_enabled !== false)
   const poiMarkers = useMemo(() => (pois as Poi[]).map((poi: Poi) => (
     <Marker
       key={`poi-${poi.osm_id}`}
@@ -629,20 +631,22 @@ export const MapView = memo(function MapView({
       <ViewportController onViewportChange={onViewportChange} />
       <LeafletLocationLayer position={userPosition} mode={trackingMode} />
 
-      <MarkerClusterGroup
-        chunkedLoading
-        chunkInterval={30}
-        chunkDelay={0}
-        maxClusterRadius={30}
-        disableClusteringAtZoom={11}
-        spiderfyOnMaxZoom
-        showCoverageOnHover={false}
-        zoomToBoundsOnClick
-        animate={false}
-        iconCreateFunction={clusterIconCreateFunction}
-      >
-        {markers}
-      </MarkerClusterGroup>
+      {markerGroupingEnabled ? (
+        <MarkerClusterGroup
+          chunkedLoading
+          chunkInterval={30}
+          chunkDelay={0}
+          maxClusterRadius={30}
+          disableClusteringAtZoom={11}
+          spiderfyOnMaxZoom
+          showCoverageOnHover={false}
+          zoomToBoundsOnClick
+          animate={false}
+          iconCreateFunction={clusterIconCreateFunction}
+        >
+          {markers}
+        </MarkerClusterGroup>
+      ) : markers}
 
       {/* Apple-Maps style: darker-blue casing under a bright-blue core, rounded. */}
       {route && route.length > 0 && route.flatMap((seg, i) => seg.length > 1 ? [

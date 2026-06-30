@@ -26,6 +26,10 @@ const glMap = vi.hoisted(() => ({
   getStyle: vi.fn().mockReturnValue({ layers: [] }),
   isStyleLoaded: vi.fn().mockReturnValue(true),
   getCanvasContainer: vi.fn(() => document.createElement('div')),
+  getLayer: vi.fn().mockReturnValue(null),
+  queryRenderedFeatures: vi.fn().mockReturnValue([]),
+  querySourceFeatures: vi.fn().mockReturnValue([]),
+  easeTo: vi.fn(),
 }))
 
 vi.mock('mapbox-gl', () => ({
@@ -101,7 +105,7 @@ vi.mock('./locationMarkerMapbox', () => ({
 
 vi.mock('./reservationsMapbox', () => ({
   ReservationMapboxOverlay: vi.fn(function () {
-    return { update: vi.fn() }
+    return { update: vi.fn(), destroy: vi.fn() }
   }),
 }))
 
@@ -136,6 +140,13 @@ function buildMapPlace(overrides: Record<string, any> = {}) {
 }
 
 beforeEach(() => {
+  glMap.on.mockImplementation(() => glMap)
+  glMap.off.mockImplementation(() => glMap)
+  glMap.once.mockImplementation(() => glMap)
+  glMap.getSource.mockReturnValue(null)
+  glMap.getLayer.mockReturnValue(null)
+  glMap.queryRenderedFeatures.mockReturnValue([])
+  glMap.querySourceFeatures.mockReturnValue([])
   useSettingsStore.setState({
     settings: {
       ...useSettingsStore.getState().settings,
@@ -143,6 +154,7 @@ beforeEach(() => {
       mapbox_access_token: 'pk.test_token',
       mapbox_style: 'mapbox://styles/mapbox/streets-v12',
       mapbox_3d_enabled: false,
+      map_icon_grouping_enabled: true,
     },
   } as any)
 })
@@ -226,5 +238,33 @@ describe('MapViewGL', () => {
     // The MapLibre engine builds the map even without a token; Mapbox is not used.
     expect(maplibregl.Map).toHaveBeenCalled()
     expect(mapboxgl.Map).not.toHaveBeenCalled()
+  })
+
+  it('FE-COMP-MAPVIEWGL-005: adds clustered place source for MapLibre when icon grouping is enabled', async () => {
+    glMap.on.mockImplementation((event: string, handlerOrLayer: unknown) => {
+      if (event === 'load' && typeof handlerOrLayer === 'function') handlerOrLayer()
+      return glMap
+    })
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        map_provider: 'maplibre-gl',
+        mapbox_access_token: '',
+        maplibre_style: 'https://tiles.openfreemap.org/styles/liberty',
+        map_icon_grouping_enabled: true,
+      },
+    } as any)
+
+    render(<MapViewGL places={[buildMapPlace({ id: 1, lat: 48.8584, lng: 2.2945 })]} fitKey={1} glProvider="maplibre-gl" />)
+    await act(async () => {})
+
+    expect(glMap.addSource).toHaveBeenCalledWith('trip-place-clusters', expect.objectContaining({
+      type: 'geojson',
+      cluster: true,
+      clusterRadius: 30,
+      clusterMaxZoom: 10,
+    }))
+    expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-circle' }))
+    expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-count' }))
   })
 })

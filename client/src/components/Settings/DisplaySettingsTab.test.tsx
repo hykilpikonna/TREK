@@ -1,5 +1,5 @@
-// FE-COMP-DISPLAY-001 to FE-COMP-DISPLAY-027
-import { render, screen } from '../../../tests/helpers/render';
+// FE-COMP-DISPLAY-001 to FE-COMP-DISPLAY-030
+import { render, screen, within } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -127,9 +127,19 @@ describe('DisplaySettingsTab', () => {
   it('FE-COMP-DISPLAY-025: blur booking codes On button is active when blur_booking_codes is true', () => {
     seedStore(useSettingsStore, { settings: buildSettings({ blur_booking_codes: true }) });
     render(<DisplaySettingsTab />);
-    const onButtons = screen.getAllByText(/^On$/i);
-    const blurOnBtn = onButtons[1].closest('button')!;
+    const blurSection = screen.getByText(/blur booking codes/i).parentElement!;
+    const blurOnBtn = within(blurSection).getByText(/^On$/i).closest('button')!;
     expect(blurOnBtn.style.border).toContain('var(--text-primary)');
+  });
+
+  it('FE-COMP-DISPLAY-030: clicking map icon grouping Off calls updateSetting', async () => {
+    const user = userEvent.setup();
+    const updateSetting = vi.fn().mockResolvedValue(undefined);
+    seedStore(useSettingsStore, { settings: buildSettings({ map_icon_grouping_enabled: true }), updateSetting });
+    render(<DisplaySettingsTab />);
+    const groupingSection = screen.getByText('Group map icons').parentElement!;
+    await user.click(within(groupingSection).getByText(/^Off$/i));
+    expect(updateSetting).toHaveBeenCalledWith('map_icon_grouping_enabled', false);
   });
 
   it('FE-COMP-DISPLAY-026: updateSetting failure shows toast error', async () => {

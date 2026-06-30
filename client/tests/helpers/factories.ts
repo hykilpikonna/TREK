@@ -270,6 +270,7 @@ export function buildSettings(overrides: Partial<Settings> = {}): Settings {
     time_format: '12h',
     show_place_description: false,
     blur_booking_codes: false,
+    map_icon_grouping_enabled: true,
     ...overrides,
   };
 }
