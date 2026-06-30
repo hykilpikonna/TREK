@@ -36,6 +36,10 @@ function hasValidCoords(place: Place): place is PlaceWithCoords {
   return place.lat != null && place.lng != null && Number.isFinite(place.lat) && Number.isFinite(place.lng)
 }
 
+function isValidCoordinate(coord: [number, number] | null | undefined): coord is [number, number] {
+  return !!coord && Number.isFinite(coord[0]) && Number.isFinite(coord[1])
+}
+
 function buildPlaceClusterData(places: Place[]) {
   return {
     type: 'FeatureCollection' as const,
@@ -242,6 +246,11 @@ export function MapViewGL({
   onClickRefs.current.marker = onMarkerClick
   onClickRefs.current.map = onMapClick
   onClickRefs.current.context = onMapContextMenu
+  const routeCoords = useMemo<[number, number][]>(() => (route || []).flat().filter(isValidCoordinate), [route])
+  const routeFitKey = useMemo(
+    () => routeCoords.map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`).join('|'),
+    [routeCoords],
+  )
 
   // Build/rebuild the map on provider/style/token/3d change
   useEffect(() => {
@@ -790,17 +799,29 @@ export function MapViewGL({
     return { top, right: rightWidth + 40, bottom, left: leftWidth + 40 }
   }, [leftWidth, rightWidth, hasInspector, hasDayDetail])
 
-  const prevFitKey = useRef(-1)
+  const prevFitKey = useRef<number | null>(-1)
+  const pendingRouteFitRef = useRef<{ fitKey: number | null; routeKey: string } | null>(null)
   useEffect(() => {
-    if (fitKey === prevFitKey.current) return
-    prevFitKey.current = fitKey
+    const fitKeyChanged = fitKey !== prevFitKey.current
+    const routeArrivedForPendingFit =
+      !fitKeyChanged
+      && pendingRouteFitRef.current?.fitKey === fitKey
+      && !!routeFitKey
+      && routeFitKey !== pendingRouteFitRef.current.routeKey
+    if (!fitKeyChanged && !routeArrivedForPendingFit) return
     const map = mapRef.current
     if (!map) return
+    if (fitKeyChanged) {
+      prevFitKey.current = fitKey
+      pendingRouteFitRef.current = { fitKey, routeKey: routeFitKey }
+    }
     const target = dayPlaces.length > 0 ? dayPlaces : places
-    const valid = target.filter(p => p.lat && p.lng)
-    if (valid.length === 0) return
+    const markerPoints = target.filter(hasValidCoords).map(p => [p.lat, p.lng] as [number, number])
+    const fitPoints = routeCoords.length > 0 ? [...routeCoords, ...markerPoints] : markerPoints
+    if (fitPoints.length === 0) return
     const bounds = new gl.LngLatBounds()
-    valid.forEach(p => bounds.extend([p.lng, p.lat]))
+    fitPoints.forEach(([lat, lng]) => bounds.extend([lng, lat]))
+    let fitted = false
     const run = () => {
       try {
         map.fitBounds(bounds, {
@@ -809,11 +830,13 @@ export function MapViewGL({
           pitch: enableMapbox3d ? 45 : 0,
           duration: 400,
         })
+        fitted = true
       } catch { /* noop */ }
     }
-    if (map.loaded()) run()
-    else map.once('load', run)
-  }, [fitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+    run()
+    if (!fitted && typeof map.once === 'function') map.once('load', run)
+    if (routeArrivedForPendingFit) pendingRouteFitRef.current = null
+  }, [fitKey, routeFitKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // flyTo selected place
   useEffect(() => {
