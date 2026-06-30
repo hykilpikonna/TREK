@@ -32,6 +32,23 @@ const glMap = vi.hoisted(() => ({
   easeTo: vi.fn(),
 }))
 
+const glBounds = vi.hoisted(() => {
+  const state = {
+    instances: [] as Array<{ extend: ReturnType<typeof vi.fn> }>,
+  }
+  return {
+    get instances() { return state.instances },
+    clear: () => { state.instances = [] },
+    create: () => {
+      const bounds = {
+        extend: vi.fn(() => bounds),
+      }
+      state.instances.push(bounds)
+      return bounds
+    },
+  }
+})
+
 vi.mock('mapbox-gl', () => ({
   default: {
     accessToken: '',
@@ -47,7 +64,7 @@ vi.mock('mapbox-gl', () => ({
       }
     }),
     LngLatBounds: vi.fn(function () {
-      return { extend: vi.fn().mockReturnThis() }
+      return glBounds.create()
     }),
     NavigationControl: vi.fn(),
     Popup: vi.fn(function () {
@@ -76,7 +93,7 @@ vi.mock('maplibre-gl', () => ({
       }
     }),
     LngLatBounds: vi.fn(function () {
-      return { extend: vi.fn().mockReturnThis() }
+      return glBounds.create()
     }),
     NavigationControl: vi.fn(),
     Popup: vi.fn(function () {
@@ -143,6 +160,7 @@ beforeEach(() => {
   glMap.on.mockImplementation(() => glMap)
   glMap.off.mockImplementation(() => glMap)
   glMap.once.mockImplementation(() => glMap)
+  glMap.loaded.mockReturnValue(true)
   glMap.getSource.mockReturnValue(null)
   glMap.getLayer.mockReturnValue(null)
   glMap.queryRenderedFeatures.mockReturnValue([])
@@ -160,6 +178,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks()
+  glBounds.clear()
   resetAllStores()
 })
 
@@ -264,5 +283,52 @@ describe('MapViewGL', () => {
     }))
     expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-circle' }))
     expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-count' }))
+  })
+
+  it('FE-COMP-MAPVIEWGL-006: fits bounds immediately even when MapLibre loaded() is false', async () => {
+    glMap.loaded.mockReturnValue(false)
+    const places = [
+      buildMapPlace({ id: 1, lat: 35.38, lng: 136.94 }),
+      buildMapPlace({ id: 2, lat: 35.42, lng: 136.76 }),
+    ]
+
+    render(<MapViewGL places={places} dayPlaces={places} fitKey={1} glProvider="maplibre-gl" />)
+    await act(async () => {})
+
+    expect(glMap.fitBounds).toHaveBeenCalled()
+  })
+
+  it('FE-COMP-MAPVIEWGL-007: fits MapLibre bounds to route geometry when it arrives after a day fit', async () => {
+    const dayPlaces = [
+      buildMapPlace({ id: 1, lat: 35.38, lng: 136.94 }),
+      buildMapPlace({ id: 2, lat: 35.42, lng: 136.76 }),
+    ]
+
+    const { rerender } = render(
+      <MapViewGL
+        places={dayPlaces}
+        dayPlaces={dayPlaces}
+        route={null}
+        fitKey={1}
+        glProvider="maplibre-gl"
+      />,
+    )
+    await act(async () => {})
+    const afterDayFit = glMap.fitBounds.mock.calls.length
+
+    rerender(
+      <MapViewGL
+        places={dayPlaces}
+        dayPlaces={dayPlaces}
+        route={[[[35.38, 136.94], [35.72, 137.51], [35.42, 136.76]]]}
+        fitKey={1}
+        glProvider="maplibre-gl"
+      />,
+    )
+    await act(async () => {})
+
+    expect(glMap.fitBounds.mock.calls.length).toBeGreaterThan(afterDayFit)
+    const latestBounds = glBounds.instances[glBounds.instances.length - 1]
+    expect(latestBounds.extend).toHaveBeenCalledWith([137.51, 35.72])
   })
 })

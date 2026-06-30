@@ -48,10 +48,7 @@ body { height: 100%; overflow: auto; overscroll-behavior: none; -webkit-overflow
 }
 .trek-map-popup .mapboxgl-popup-tip,
 .trek-map-popup .maplibregl-popup-tip {
-  border-top-color: #fff;
-  border-bottom-color: #fff;
-  border-left-color: #fff;
-  border-right-color: #fff;
+  display: none !important;
 }
 
 .atlas-tooltip {
