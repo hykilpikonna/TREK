@@ -22,6 +22,7 @@ import { usePlaceSelection } from '../../hooks/usePlaceSelection'
 import { usePlannerHistory } from '../../hooks/usePlannerHistory'
 import { useAirtrailConnection } from '../../hooks/useAirtrailConnection'
 import type { Accommodation, TripMember, Day, Place, Reservation } from '../../types'
+import { DEFAULT_MAP_LAT, DEFAULT_MAP_LNG, DEFAULT_MAP_ZOOM } from '../../constants/mapDefaults'
 import { resolvePoolAssignmentId } from './tripPlannerModel'
 
 /**
@@ -824,8 +825,8 @@ export function useTripPlanner() {
   }, [selectedDayId, assignments])
 
   const mapTileUrl = settings.map_tile_url || 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-  const defaultCenter = [settings.default_lat || 48.8566, settings.default_lng || 2.3522]
-  const defaultZoom = settings.default_zoom || 10
+  const defaultCenter = [settings.default_lat ?? DEFAULT_MAP_LAT, settings.default_lng ?? DEFAULT_MAP_LNG]
+  const defaultZoom = settings.default_zoom ?? DEFAULT_MAP_ZOOM
 
   const fontStyle = { fontFamily: "var(--font-system)" }
 
