@@ -1,17 +1,69 @@
-import { gunzipSync } from 'node:zlib';
-
+import {
+  allProtoMessages as allMessages,
+  firstProtoMessage as firstMessage,
+  firstProtoVarint as firstVarint,
+  isProtoText as isText,
+  parseProtoMessage as parseMessage,
+  protoFieldStrings as fieldStrings,
+  protoFixed32Float as fixed32Float,
+  protoFixed64Double as fixed64Double,
+  tryParseProtoMessage as tryParseMessage,
+} from './googleMapsMobile/protobuf';
+import {
+  GOOGLE_MAPS_MOBILE_API_KEY,
+  GOOGLE_MAPS_MOBILE_CLIENT_DATA_BIN,
+  GOOGLE_MAPS_MOBILE_GMM_CLIENT_BIN,
+  GOOGLE_MAPS_MOBILE_MMAP_ENDPOINT,
+  GOOGLE_MAPS_MOBILE_UGC_POSTS_ENDPOINT,
+  GoogleMapsMobileReversedProtoError,
+  buildListUgcPostsReviewsPageBody,
+  buildMmapPlaceDetailsRequestBody,
+  buildMmapRichPlacePhotosRequestBody,
+} from './googleMapsMobile/reversedProto';
 import {
   GOOGLE_MAPS_FTID_RE,
   type GoogleMapsPreviewOpeningPeriod,
   type GoogleMapsPreviewOpeningPoint,
+  type GoogleMapsPreviewPopularTime,
   type GoogleMapsPreviewPlaceDetails,
 } from './googleMapsPreviewPlaceDetails';
+
+import { gunzipSync } from 'node:zlib';
 
 export interface GoogleMapsMobilePlaceDetailsRequest {
   ftid: string;
   language?: string;
   timeoutMs?: number;
   includeRaw?: boolean;
+}
+
+export interface GoogleMapsMobilePlacePhoto {
+  url: string;
+  width: number | null;
+  height: number | null;
+  attribution: string | null;
+  source: 'google_maps_mobile';
+}
+
+export interface GoogleMapsMobileRichPlaceDetails {
+  popular_times: GoogleMapsPreviewPopularTime[] | null;
+  popular_status: string | null;
+  reviews: unknown[];
+  next_reviews_page_token?: string | null;
+  photos: GoogleMapsMobilePlacePhoto[];
+  summary: string | null;
+}
+
+export interface GoogleMapsMobilePlaceReviewsRequest {
+  ftid: string;
+  pageToken: string;
+  language?: string;
+  timeoutMs?: number;
+}
+
+export interface GoogleMapsMobileReviewListPage {
+  reviews: unknown[];
+  next_page_token: string | null;
 }
 
 interface NormalizedRequest {
@@ -27,31 +79,15 @@ interface BuiltMobilePlaceDetailsRequest {
   headers: Record<string, string>;
 }
 
-interface ProtoField {
-  field: number;
-  wire: number;
-  value: number | Buffer;
-  tagPos: number;
-  end: number;
-}
-
-const GOOGLE_MAPS_MOBILE_MMAP_ENDPOINT = 'https://mobilemaps.googleapis.com/glm/mmap';
 const DEFAULT_LANGUAGE = 'en-US,en;q=0.9';
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
+const MAX_REVIEW_PAGES = 3;
+const MAX_MOBILE_REVIEWS = 32;
 const DAY_MINUTES = 24 * 60;
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-// Captured from the iOS Google Maps 25.47 /glm/mmap place preview request. The
-// following type-450 chunk is generated per FTID.
-const MOBILE_MMAP_PREFIX_AND_CLIENT_CHUNK_BASE64 =
-  'ABhGn1Se+1h53QAFZW4tVVMADmlvczppUGhvbmUxNiwxABIyNS40Ny4wLjgzMzU0MjkzMDAADGlPUy1BcHBTdG9yZQA+AAACJQoEMTE5MSABKg9jb20uZ29vZ2xlLk1hcHMyAkpQOAFC0AE1MzI9dVBaYU1zNS1QZVg3TDB2QmJYSkpiRThydVgzSHk1ckd3STdDZ0UzZ0tNTFlrcDJKTFBMQnlLcW50aXNZaEI3V1k4VmR4aTFUVVZOM1BWYUYyS05DNWM1dUdMUlR5YjcwdDg3TlgwUzJmc29HVTdBSGZhWWMtVVlIQmZpVnlRNnd5akRrbDhRQWNYUmNuZVYyX2NJUHBmbzJaY3V2MkpTajRndUp4ZHJxSmVxRzNkcDEzM0FRRmF6TUVuVmlIS2lFSjZILVhBdm5OYWVoqAEAsAEEwAEByAEB2gEGMTguNy4ygAIBiAIBmgMCEAPaA+cBrLIM6beoEsnSzyKX4PUstIX2LMqV9iyXg/csop33LNee9yzwkvgs16X4LNup+CyjtfgsrvD4LOGR+Sy0lvksp5r5LKma+Sy6pfks/6r5LJKx+SyKs/ks/7z5LMe++SzLv/ksrMb5LNbN+SzW2fksn/j5LIb/+Sy3m/osw776LKj4+izHh/ssgZD7LIK6+yyR36Mv7b6nL7j0hTD24Ycwg+eHMPrwhzDFpYgw5fiIML2FiTCEhokw4p+JMPKniTCp04kwiumJMOjA4zHPteUxpZCxMrzavzLx+sYy9frGMvn6xjKjvcoy8AMCiAQAkgQSMjUuNDcuMC44MzM1NDI5MzAwoAT0A6oEAMAEAsgEDw==';
-
-const PLACE_DETAILS_CHUNK_TYPE = 450;
-const PLACE_DETAILS_FIELD_MASK = Buffer.from(
-  '10011801200128014001480150015801800101880101980101a80101b00101ba01020801',
-  'hex',
-);
+const richPlaceDetailsResponseCache = new Map<string, GoogleMapsMobileRichPlaceDetails>();
+const richPlaceDetailsInFlight = new Map<string, Promise<GoogleMapsMobileRichPlaceDetails>>();
 
 function makeHttpError(status: number, message: string): Error & { status: number } {
   return Object.assign(new Error(message), { status });
@@ -85,188 +121,85 @@ function normalizeRequest(input: GoogleMapsMobilePlaceDetailsRequest): Normalize
   };
 }
 
-function varint(value: number): Buffer {
-  let n = BigInt(Math.floor(value));
-  const bytes: number[] = [];
-  do {
-    let byte = Number(n & 0x7fn);
-    n >>= 7n;
-    if (n) byte |= 0x80;
-    bytes.push(byte);
-  } while (n);
-  return Buffer.from(bytes);
-}
-
-function readVarint(buffer: Buffer, pos: number, end = buffer.length): [number, number] {
-  let value = 0n;
-  let shift = 0n;
-  let index = pos;
-  while (index < end) {
-    const byte = buffer[index++];
-    value |= BigInt(byte & 0x7f) << shift;
-    if (!(byte & 0x80)) return [Number(value), index];
-    shift += 7n;
-  }
-  throw new Error('Unterminated protobuf varint');
-}
-
-function tag(field: number, wire: number): Buffer {
-  return varint(field * 8 + wire);
-}
-
-function delimited(buffer: Buffer): Buffer {
-  return Buffer.concat([varint(buffer.length), buffer]);
-}
-
-function varintField(field: number, value: number): Buffer {
-  return Buffer.concat([tag(field, 0), varint(value)]);
-}
-
-function bytesField(field: number, value: Buffer): Buffer {
-  return Buffer.concat([tag(field, 2), delimited(value)]);
-}
-
-function stringField(field: number, value: string): Buffer {
-  return bytesField(field, Buffer.from(value, 'utf8'));
-}
-
-function messageField(field: number, parts: Buffer[]): Buffer {
-  return bytesField(field, Buffer.concat(parts));
-}
-
-function skipField(buffer: Buffer, pos: number, end: number, wire: number): number {
-  if (wire === 0) return readVarint(buffer, pos, end)[1];
-  if (wire === 1) return pos + 8 <= end ? pos + 8 : Infinity;
-  if (wire === 2) {
-    const [length, valuePos] = readVarint(buffer, pos, end);
-    return valuePos + length <= end ? valuePos + length : Infinity;
-  }
-  if (wire === 5) return pos + 4 <= end ? pos + 4 : Infinity;
-  return Infinity;
-}
-
-function parseMessage(buffer: Buffer, start = 0, end = buffer.length): ProtoField[] {
-  const fields: ProtoField[] = [];
-  let pos = start;
-  while (pos < end) {
-    const tagPos = pos;
-    const [tagValue, valuePos] = readVarint(buffer, pos, end);
-    pos = valuePos;
-    const field = Math.floor(tagValue / 8);
-    const wire = tagValue % 8;
-    if (field <= 0) throw new Error('Invalid protobuf field number');
-
-    let value: number | Buffer;
-    if (wire === 0) {
-      const [varintValue, next] = readVarint(buffer, pos, end);
-      value = varintValue;
-      pos = next;
-    } else if (wire === 1 || wire === 5) {
-      const next = skipField(buffer, pos, end, wire);
-      if (!Number.isFinite(next)) throw new Error('Invalid fixed-width protobuf field');
-      value = buffer.subarray(pos, next);
-      pos = next;
-    } else if (wire === 2) {
-      const [length, dataPos] = readVarint(buffer, pos, end);
-      const next = dataPos + length;
-      if (next > end) throw new Error('Invalid length-delimited protobuf field');
-      value = buffer.subarray(dataPos, next);
-      pos = next;
-    } else {
-      throw new Error(`Unsupported protobuf wire type ${wire}`);
-    }
-
-    fields.push({ field, wire, value, tagPos, end: pos });
-  }
-  return fields;
-}
-
-function tryParseMessage(buffer: Buffer): ProtoField[] | null {
-  try {
-    return parseMessage(buffer);
-  } catch {
-    return null;
-  }
-}
-
-function isText(buffer: Buffer): boolean {
-  if (buffer.length === 0) return false;
-  const text = buffer.toString('utf8');
-  if (text.includes('\uFFFD')) return false;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code !== 9 && code !== 10 && code !== 13 && code < 32) return false;
-  }
-  return true;
-}
-
-function fieldStrings(fields: ProtoField[], field: number): string[] {
-  return fields
-    .filter((entry) => entry.field === field && entry.wire === 2 && Buffer.isBuffer(entry.value) && isText(entry.value))
-    .map((entry) => (entry.value as Buffer).toString('utf8'));
-}
-
-function firstVarint(fields: ProtoField[], field: number): number | null {
-  const found = fields.find((entry) => entry.field === field && entry.wire === 0 && typeof entry.value === 'number');
-  return typeof found?.value === 'number' ? found.value : null;
-}
-
-function firstMessage(fields: ProtoField[], field: number): Buffer | null {
-  const found = fields.find((entry) => entry.field === field && entry.wire === 2 && Buffer.isBuffer(entry.value));
-  return Buffer.isBuffer(found?.value) ? found.value : null;
-}
-
-function allMessages(fields: ProtoField[], field: number): Buffer[] {
-  return fields
-    .filter((entry) => entry.field === field && entry.wire === 2 && Buffer.isBuffer(entry.value))
-    .map((entry) => entry.value as Buffer);
-}
-
-function fixed64Double(fields: ProtoField[], field: number): number | null {
-  const found = fields.find((entry) => entry.field === field && entry.wire === 1 && Buffer.isBuffer(entry.value));
-  return Buffer.isBuffer(found?.value) && found.value.length === 8 ? found.value.readDoubleLE(0) : null;
-}
-
-function fixed32Float(fields: ProtoField[], field: number): number | null {
-  const found = fields.find((entry) => entry.field === field && entry.wire === 5 && Buffer.isBuffer(entry.value));
-  return Buffer.isBuffer(found?.value) && found.value.length === 4 ? found.value.readFloatLE(0) : null;
-}
-
-function buildPlaceDetailsPayload(ftid: string): Buffer {
-  return Buffer.concat([
-    messageField(1, [messageField(1, [stringField(1, ftid)])]),
-    bytesField(2, PLACE_DETAILS_FIELD_MASK),
-    messageField(3, [messageField(4, [varintField(2, 4989)])]),
-    varintField(5, 1),
-  ]);
+function buildMobileMmapHeaders(request: NormalizedRequest, bodyLength: number): Record<string, string> {
+  return {
+    'content-type': 'application/binary',
+    accept: '*/*',
+    'accept-encoding': 'gzip, deflate, br',
+    'accept-language': request.language,
+    'user-agent': 'com.google.Maps/25.47.0 iPhone/18.7.2 hw/iPhone16_1 (gzip)',
+    'upload-draft-interop-version': '6',
+    'x-client-time-format': 'CAI=',
+    'upload-complete': '?1',
+    'x-goog-ext-353267353-bin': 'IOTDCA==',
+    'content-length': String(bodyLength),
+  };
 }
 
 function buildMobileMmapRequest(request: NormalizedRequest): BuiltMobilePlaceDetailsRequest {
-  const payload = buildPlaceDetailsPayload(request.ftid);
-  const header = Buffer.alloc(6);
-  header.writeUInt16BE(PLACE_DETAILS_CHUNK_TYPE, 0);
-  header.writeUInt32BE(payload.length, 2);
-  const body = Buffer.concat([
-    Buffer.from(MOBILE_MMAP_PREFIX_AND_CLIENT_CHUNK_BASE64, 'base64'),
-    header,
-    payload,
-  ]);
+  const body = buildMmapPlaceDetailsRequestBody(request.ftid);
 
   return {
     endpoint: GOOGLE_MAPS_MOBILE_MMAP_ENDPOINT,
     body,
-    headers: {
-      'content-type': 'application/binary',
-      accept: '*/*',
-      'accept-encoding': 'gzip, deflate, br',
-      'accept-language': request.language,
-      'user-agent': 'com.google.Maps/25.47.0 iPhone/18.7.2 hw/iPhone16_1 (gzip)',
-      'upload-draft-interop-version': '6',
-      'x-client-time-format': 'CAI=',
-      'upload-complete': '?1',
-      'x-goog-ext-353267353-bin': 'IOTDCA==',
-      'content-length': String(body.length),
-    },
+    headers: buildMobileMmapHeaders(request, body.length),
+  };
+}
+
+function buildMobileMmapRichPhotosRequest(request: NormalizedRequest): BuiltMobilePlaceDetailsRequest {
+  let body: Buffer;
+  try {
+    body = buildMmapRichPlacePhotosRequestBody(request.ftid);
+  } catch (err) {
+    if (err instanceof GoogleMapsMobileReversedProtoError) {
+      throw makeHttpError(err.status, err.message);
+    }
+    throw err;
+  }
+
+  return {
+    endpoint: GOOGLE_MAPS_MOBILE_MMAP_ENDPOINT,
+    body,
+    headers: buildMobileMmapHeaders(request, body.length),
+  };
+}
+
+function normalizeReviewListRequest(
+  input: GoogleMapsMobilePlaceReviewsRequest,
+): NormalizedRequest & { pageToken: string } {
+  const request = normalizeRequest(input);
+  const pageToken = nonEmptyString(input.pageToken);
+  if (!pageToken) throw makeHttpError(400, 'Google Maps mobile review list requires a page token');
+  return { ...request, pageToken };
+}
+
+function buildMobileReviewListHeaders(request: NormalizedRequest, bodyLength: number): Record<string, string> {
+  return {
+    'content-type': 'application/x-protobuf',
+    accept: '*/*',
+    'accept-encoding': 'gzip, deflate, br',
+    'accept-language': request.language,
+    'x-client-data-bin': GOOGLE_MAPS_MOBILE_CLIENT_DATA_BIN,
+    'x-gmm-client-bin': GOOGLE_MAPS_MOBILE_GMM_CLIENT_BIN,
+    'x-goog-api-key': GOOGLE_MAPS_MOBILE_API_KEY,
+    'x-goog-request-params': 'frontend=boq',
+    'x-server-timeout': '15.000000',
+    'user-agent': 'grpc-objc/1.77.0-dev (GTMSessionFetcher;)',
+    'content-length': String(bodyLength),
+    'x-client-time-format-bin': 'CAI=',
+    'x-goog-ext-353267353-bin': 'IOTDCA==',
+  };
+}
+
+export function buildGoogleMapsMobileReviewListRequest(
+  input: GoogleMapsMobilePlaceReviewsRequest,
+): BuiltMobilePlaceDetailsRequest {
+  const request = normalizeReviewListRequest(input);
+  const body = buildListUgcPostsReviewsPageBody(request.ftid, request.pageToken);
+  return {
+    endpoint: GOOGLE_MAPS_MOBILE_UGC_POSTS_ENDPOINT,
+    body,
+    headers: buildMobileReviewListHeaders(request, body.length),
   };
 }
 
@@ -277,20 +210,122 @@ export function buildGoogleMapsMobilePlaceDetailsRequest(
 }
 
 function decodeMmapResponse(responseBody: Buffer): { protobuf: Buffer; gzipOffset: number } {
-  const gzipOffset = responseBody.indexOf(Buffer.from([0x1f, 0x8b]));
-  if (gzipOffset < 0) throw makeHttpError(502, 'Google Maps mobile place response did not contain a gzip protobuf payload');
-  try {
-    return { protobuf: gunzipSync(responseBody.subarray(gzipOffset)), gzipOffset };
-  } catch (err) {
-    throw makeHttpError(
-      502,
-      `Unable to inflate Google Maps mobile place response: ${err instanceof Error ? err.message : 'invalid gzip'}`,
-    );
+  const gzipMarker = Buffer.from([0x1f, 0x8b]);
+  let offset = 0;
+  const candidates: Array<{ protobuf: Buffer; gzipOffset: number }> = [];
+  const errors: string[] = [];
+
+  while ((offset = responseBody.indexOf(gzipMarker, offset)) >= 0) {
+    try {
+      candidates.push({ protobuf: gunzipSync(responseBody.subarray(offset)), gzipOffset: offset });
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : 'invalid gzip');
+    }
+    offset += gzipMarker.length;
   }
+
+  if (candidates.length === 0) {
+    if (errors.length > 0) {
+      throw makeHttpError(502, `Unable to inflate Google Maps mobile place response: ${errors[0]}`);
+    }
+    throw makeHttpError(502, 'Google Maps mobile place response did not contain a gzip protobuf payload');
+  }
+
+  return candidates.reduce((best, candidate) => (candidate.protobuf.length > best.protobuf.length ? candidate : best));
 }
 
 function responseBufferFrom(value: Buffer | ArrayBuffer): Buffer {
   return Buffer.isBuffer(value) ? value : Buffer.from(value);
+}
+
+function isUrlByte(byte: number): boolean {
+  return byte > 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x3c && byte !== 0x3e && byte !== 0x5c;
+}
+
+function normalizeRichPhotoUrl(raw: string): GoogleMapsMobilePlacePhoto | null {
+  const cleaned = raw.replace(/[:;),\]]+\d*$/g, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    return null;
+  }
+  if (!parsed.hostname.endsWith('googleusercontent.com')) return null;
+  if (!/(?:^|\/)(?:gps|gpms|grass)-cs-s\//.test(parsed.pathname)) return null;
+  if (/\/a-|photo\.jpg|=mm|manifest|googlevideo/i.test(cleaned)) return null;
+  const variantIndex = cleaned.lastIndexOf('=');
+  if (variantIndex < 0) return null;
+  const base = cleaned.slice(0, variantIndex);
+  if (!base || base.includes('?')) return null;
+  return {
+    url: `${base}=w640-h426-k-no`,
+    width: 640,
+    height: 426,
+    attribution: null,
+    source: 'google_maps_mobile',
+  };
+}
+
+function googleusercontentPhotoDedupeKey(url: string): string {
+  const cleaned = url.replace(/[:;),\]]+\d*$/g, '');
+  try {
+    const parsed = new URL(cleaned);
+    const pathKey = `${parsed.origin}${parsed.pathname}`;
+    const variantIndex = pathKey.lastIndexOf('=');
+    return variantIndex > pathKey.lastIndexOf('/') ? pathKey.slice(0, variantIndex) : pathKey;
+  } catch {
+    return cleaned.replace(/[?#].*$/, '').replace(/=[^=/?#]+$/, '');
+  }
+}
+
+function extractGoogleMapsMobilePhotoUrls(protobuf: Buffer): GoogleMapsMobilePlacePhoto[] {
+  const photos: GoogleMapsMobilePlacePhoto[] = [];
+  const seen = new Set<string>();
+  const marker = Buffer.from('https://', 'ascii');
+  let offset = 0;
+  while ((offset = protobuf.indexOf(marker, offset)) >= 0) {
+    let end = offset;
+    while (end < protobuf.length && isUrlByte(protobuf[end])) end += 1;
+    const photo = normalizeRichPhotoUrl(protobuf.subarray(offset, end).toString('ascii'));
+    const dedupeKey = photo ? googleusercontentPhotoDedupeKey(photo.url) : null;
+    if (photo && dedupeKey && !seen.has(dedupeKey)) {
+      seen.add(dedupeKey);
+      photos.push(photo);
+      if (photos.length >= 24) break;
+    }
+    offset = Math.max(end, offset + marker.length);
+  }
+  return photos;
+}
+
+export function parseGoogleMapsMobilePlacePhotosResponse(
+  responseBody: Buffer | ArrayBuffer,
+): GoogleMapsMobilePlacePhoto[] {
+  const body = responseBufferFrom(responseBody);
+  const decoded = decodeMmapResponse(body);
+  return extractGoogleMapsMobilePhotoUrls(decoded.protobuf);
+}
+
+export function parseGoogleMapsMobileRichPlaceDetailsResponse(
+  responseBody: Buffer | ArrayBuffer,
+): GoogleMapsMobileRichPlaceDetails {
+  const body = responseBufferFrom(responseBody);
+  const decoded = decodeMmapResponse(body);
+  const photos = extractGoogleMapsMobilePhotoUrls(decoded.protobuf);
+  const rootFields = tryParseMessage(decoded.protobuf);
+  const placeMessage = rootFields ? firstMessage(rootFields, 1) : null;
+  const placeFields = placeMessage ? tryParseMessage(placeMessage) : null;
+
+  const popularTimesMessage = placeFields ? firstMessage(placeFields, 57) : null;
+  const reviewsMessage = placeFields ? firstMessage(placeFields, 81) : null;
+  return {
+    popular_times: parseMobilePopularTimes(popularTimesMessage),
+    popular_status: parseMobilePopularStatus(popularTimesMessage),
+    reviews: parseMobileReviews(reviewsMessage),
+    next_reviews_page_token: extractReviewPageToken(reviewsMessage) ?? extractReviewPageToken(decoded.protobuf),
+    photos,
+    summary: null,
+  };
 }
 
 function googleDayFromMobile(value: unknown): number | null {
@@ -303,7 +338,7 @@ function googleDayFromMobile(value: unknown): number | null {
 function openingPoint(day: number, minutes: number): GoogleMapsPreviewOpeningPoint {
   const normalized = ((minutes % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
   return {
-    day: ((day + Math.floor(minutes / DAY_MINUTES)) % 7 + 7) % 7,
+    day: (((day + Math.floor(minutes / DAY_MINUTES)) % 7) + 7) % 7,
     hour: Math.floor(normalized / 60),
     minute: normalized % 60,
   };
@@ -435,6 +470,220 @@ function parsePhone(phoneMessage: Buffer | null): string | null {
   return fieldStrings(fields, 1)[0] ?? fieldStrings(fields, 4)[0] ?? null;
 }
 
+function parseMobilePopularTimes(popularTimesMessage: Buffer | null): GoogleMapsPreviewPopularTime[] | null {
+  if (!popularTimesMessage) return null;
+  const fields = tryParseMessage(popularTimesMessage);
+  if (!fields) return null;
+
+  const popularTimes: GoogleMapsPreviewPopularTime[] = [];
+  for (const dayMessage of allMessages(fields, 1)) {
+    const dayFields = tryParseMessage(dayMessage);
+    if (!dayFields) continue;
+    const day = googleDayFromMobile(firstVarint(dayFields, 1));
+    if (day === null) continue;
+
+    for (const hourMessage of allMessages(dayFields, 2)) {
+      const hourFields = tryParseMessage(hourMessage);
+      if (!hourFields) continue;
+      const hour = firstVarint(hourFields, 1);
+      const percent = firstVarint(hourFields, 2);
+      if (
+        hour === null ||
+        percent === null ||
+        !Number.isInteger(hour) ||
+        !Number.isInteger(percent) ||
+        hour < 0 ||
+        hour > 23 ||
+        percent < 0 ||
+        percent > 100
+      ) {
+        continue;
+      }
+      popularTimes.push({ day, hour, occupancy_percent: percent });
+    }
+  }
+
+  return popularTimes.length > 0 ? popularTimes : null;
+}
+
+function parseMobilePopularStatus(popularTimesMessage: Buffer | null): string | null {
+  if (!popularTimesMessage) return null;
+  const fields = tryParseMessage(popularTimesMessage);
+  if (!fields) return null;
+  return fieldStrings(fields, 2)[0] ?? null;
+}
+
+function parseMobileReviewAuthor(authorMessage: Buffer | null): {
+  author: string | null;
+  photo: string | null;
+  uri: string | null;
+} {
+  if (!authorMessage) return { author: null, photo: null, uri: null };
+  const fields = tryParseMessage(authorMessage);
+  if (!fields) return { author: null, photo: null, uri: null };
+  return {
+    uri: fieldStrings(fields, 1)[0] ?? null,
+    author: fieldStrings(fields, 2)[0] ?? null,
+    photo: fieldStrings(fields, 3)[0] ?? null,
+  };
+}
+
+function publishedAtFromMillis(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function publishedAtFromGoogleTimestamp(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
+  const millis = value > 1_000_000_000_000_000 ? value / 1000 : value > 1_000_000_000_000 ? value : value * 1000;
+  return publishedAtFromMillis(millis);
+}
+
+function parseMobileReviews(reviewsMessage: Buffer | null): unknown[] {
+  if (!reviewsMessage) return [];
+  const fields = tryParseMessage(reviewsMessage);
+  if (!fields) return [];
+
+  const reviews: unknown[] = [];
+  for (const reviewMessage of allMessages(fields, 1)) {
+    const reviewFields = tryParseMessage(reviewMessage);
+    if (!reviewFields) continue;
+    const text = fieldStrings(reviewFields, 4)[0] ?? null;
+    const authorInfo = parseMobileReviewAuthor(firstMessage(reviewFields, 1));
+    const author = authorInfo.author;
+    if (!text && !author) continue;
+
+    reviews.push({
+      author,
+      rating: firstVarint(reviewFields, 5),
+      text,
+      time: fieldStrings(reviewFields, 2)[0] ?? null,
+      published_at: publishedAtFromMillis(firstVarint(reviewFields, 58) ?? firstVarint(reviewFields, 28)),
+      photo: authorInfo.photo,
+      uri: fieldStrings(reviewFields, 19)[0] ?? authorInfo.uri,
+      language: fieldStrings(reviewFields, 33)[0] ?? null,
+    });
+  }
+
+  return reviews;
+}
+
+function extractReviewPageToken(buffer: Buffer | null): string | null {
+  if (!buffer) return null;
+  const tokenPattern = /\b(Cj[A-Za-z0-9_-]{20,}:[0-9]{1,5})\b/g;
+  let bestToken: string | null = null;
+  let bestOffset = -1;
+
+  for (const text of collectText(buffer)) {
+    tokenPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = tokenPattern.exec(text)) !== null) {
+      const offset = Number(match[1].split(':').pop());
+      if (Number.isInteger(offset) && offset >= bestOffset) {
+        bestOffset = offset;
+        bestToken = match[1];
+      }
+    }
+  }
+
+  return bestToken;
+}
+
+function parseUgcReviewAuthor(authorMessage: Buffer | null): {
+  author: string | null;
+  photo: string | null;
+  uri: string | null;
+  time: string | null;
+  published_at: string | null;
+} {
+  if (!authorMessage) return { author: null, photo: null, uri: null, time: null, published_at: null };
+  const fields = tryParseMessage(authorMessage);
+  if (!fields) return { author: null, photo: null, uri: null, time: null, published_at: null };
+  const profileContainer = firstMessage(fields, 5);
+  const profileContainerFields = profileContainer ? tryParseMessage(profileContainer) : null;
+  const profileMessage = profileContainerFields ? firstMessage(profileContainerFields, 1) : null;
+  const profileFields = profileMessage ? tryParseMessage(profileMessage) : null;
+
+  return {
+    author: profileFields ? (fieldStrings(profileFields, 5)[0] ?? null) : null,
+    photo: profileFields ? (fieldStrings(profileFields, 4)[0] ?? null) : null,
+    uri: profileFields ? (fieldStrings(profileFields, 6)[0] ?? fieldStrings(profileFields, 9)[0] ?? null) : null,
+    time: fieldStrings(fields, 7)[0] ?? null,
+    published_at: publishedAtFromGoogleTimestamp(firstVarint(fields, 4) ?? firstVarint(fields, 3)),
+  };
+}
+
+function parseUgcReviewContent(contentMessage: Buffer | null): {
+  rating: number | null;
+  text: string | null;
+  language: string | null;
+} {
+  if (!contentMessage) return { rating: null, text: null, language: null };
+  const fields = tryParseMessage(contentMessage);
+  if (!fields) return { rating: null, text: null, language: null };
+  const ratingMessage = firstMessage(fields, 1);
+  const ratingFields = ratingMessage ? tryParseMessage(ratingMessage) : null;
+  const textMessage = firstMessage(fields, 2);
+  const textFields = textMessage ? tryParseMessage(textMessage) : null;
+
+  return {
+    rating: ratingFields ? firstVarint(ratingFields, 1) : null,
+    text: textFields ? (fieldStrings(textFields, 1)[0] ?? null) : null,
+    language: textFields ? (fieldStrings(textFields, 2)[0] ?? null) : null,
+  };
+}
+
+function parseUgcReviewUri(actionsMessage: Buffer | null): string | null {
+  if (!actionsMessage) return null;
+  const fields = tryParseMessage(actionsMessage);
+  if (!fields) return null;
+  const reviewUrlMessage = firstMessage(fields, 4);
+  const reviewUrlFields = reviewUrlMessage ? tryParseMessage(reviewUrlMessage) : null;
+  const urls = reviewUrlFields ? fieldStrings(reviewUrlFields, 1) : [];
+  return urls.find((url) => /\/maps\/reviews\//.test(url)) ?? urls[0] ?? null;
+}
+
+function parseUgcPostReview(postMessage: Buffer): unknown | null {
+  const postFields = tryParseMessage(postMessage);
+  if (!postFields) return null;
+  const reviewMessage = firstMessage(postFields, 1) ?? postMessage;
+  const reviewFields = tryParseMessage(reviewMessage);
+  if (!reviewFields) return null;
+
+  const authorInfo = parseUgcReviewAuthor(firstMessage(reviewFields, 2));
+  const content = parseUgcReviewContent(firstMessage(reviewFields, 3));
+  const text = nonEmptyString(content.text);
+  const author = nonEmptyString(authorInfo.author);
+  if (!text && !author && content.rating === null) return null;
+
+  return {
+    author,
+    rating: content.rating,
+    text,
+    time: nonEmptyString(authorInfo.time),
+    published_at: authorInfo.published_at,
+    photo: nonEmptyString(authorInfo.photo),
+    uri: parseUgcReviewUri(firstMessage(reviewFields, 5)) ?? nonEmptyString(authorInfo.uri),
+    language: nonEmptyString(content.language),
+  };
+}
+
+export function parseGoogleMapsMobileReviewListResponse(
+  responseBody: Buffer | ArrayBuffer,
+): GoogleMapsMobileReviewListPage {
+  const body = responseBufferFrom(responseBody);
+  const fields = parseMessage(body);
+  const reviews = allMessages(fields, 1)
+    .map(parseUgcPostReview)
+    .filter((review): review is Record<string, unknown> => Boolean(review));
+
+  return {
+    reviews,
+    next_page_token: fieldStrings(fields, 2)[0] ?? null,
+  };
+}
+
 function parseLatLng(coordsMessage: Buffer | null): { lat: number | null; lng: number | null } {
   if (!coordsMessage) return { lat: null, lng: null };
   const fields = tryParseMessage(coordsMessage);
@@ -524,4 +773,140 @@ export async function fetchGoogleMapsMobilePlaceDetails(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function fetchGoogleMapsMobilePlacePhotos(
+  input: GoogleMapsMobilePlaceDetailsRequest,
+): Promise<GoogleMapsMobilePlacePhoto[]> {
+  const details = await fetchGoogleMapsMobileRichPlaceDetails(input);
+  return details.photos;
+}
+
+export async function fetchGoogleMapsMobileReviewList(
+  input: GoogleMapsMobilePlaceReviewsRequest,
+): Promise<GoogleMapsMobileReviewListPage> {
+  const request = normalizeReviewListRequest(input);
+  const built = buildGoogleMapsMobileReviewListRequest(input);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
+  try {
+    const response = await fetch(built.endpoint, {
+      method: 'POST',
+      headers: built.headers,
+      body: built.body,
+      signal: controller.signal,
+    });
+    const body = Buffer.from(await response.arrayBuffer());
+    if (!response.ok) {
+      throw makeHttpError(
+        response.status,
+        `Google Maps mobile review list failed with ${response.status} ${response.statusText}`,
+      );
+    }
+    return parseGoogleMapsMobileReviewListResponse(body);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw makeHttpError(504, 'Google Maps mobile review list request timed out');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchAdditionalMobileReviews(
+  request: NormalizedRequest,
+  initialPageToken: string | null | undefined,
+  initialReviewCount: number,
+): Promise<unknown[]> {
+  const reviews: unknown[] = [];
+  const seenTokens = new Set<string>();
+  let pageToken = initialPageToken ?? null;
+
+  for (
+    let page = 0;
+    pageToken && page < MAX_REVIEW_PAGES && initialReviewCount + reviews.length < MAX_MOBILE_REVIEWS;
+    page += 1
+  ) {
+    if (seenTokens.has(pageToken)) break;
+    seenTokens.add(pageToken);
+
+    const reviewPage = await fetchGoogleMapsMobileReviewList({
+      ftid: request.ftid,
+      pageToken,
+      language: request.language,
+      timeoutMs: request.timeoutMs,
+    });
+    reviews.push(...reviewPage.reviews);
+    pageToken = reviewPage.next_page_token;
+  }
+
+  return reviews.slice(0, Math.max(0, MAX_MOBILE_REVIEWS - initialReviewCount));
+}
+
+export async function fetchGoogleMapsMobileRichPlaceDetails(
+  input: GoogleMapsMobilePlaceDetailsRequest,
+): Promise<GoogleMapsMobileRichPlaceDetails> {
+  const request = normalizeRequest(input);
+  const cached = richPlaceDetailsResponseCache.get(`${request.ftid}:${request.language}`);
+  if (cached) return cached;
+
+  const cacheKey = `${request.ftid}:${request.language}`;
+  let inFlight = richPlaceDetailsInFlight.get(cacheKey);
+  if (!inFlight) {
+    inFlight = (async () => {
+      const built = buildMobileMmapRichPhotosRequest(request);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
+      try {
+        const response = await fetch(built.endpoint, {
+          method: 'POST',
+          headers: built.headers,
+          body: built.body,
+          signal: controller.signal,
+        });
+        const body = Buffer.from(await response.arrayBuffer());
+        if (!response.ok) {
+          throw makeHttpError(
+            response.status,
+            `Google Maps mobile place photos failed with ${response.status} ${response.statusText}`,
+          );
+        }
+        const details = parseGoogleMapsMobileRichPlaceDetailsResponse(body);
+        if (details.next_reviews_page_token) {
+          try {
+            const additionalReviews = await fetchAdditionalMobileReviews(
+              request,
+              details.next_reviews_page_token,
+              details.reviews.length,
+            );
+            if (additionalReviews.length > 0) {
+              details.reviews = [...details.reviews, ...additionalReviews].slice(0, MAX_MOBILE_REVIEWS);
+            }
+          } catch (err) {
+            console.warn(
+              `Google Maps mobile review list failed for ${request.ftid}: ${err instanceof Error ? err.message : 'unknown error'}`,
+            );
+          }
+        }
+        richPlaceDetailsResponseCache.set(cacheKey, details);
+        if (richPlaceDetailsResponseCache.size > 200) {
+          const oldest = richPlaceDetailsResponseCache.keys().next().value;
+          if (oldest !== undefined) richPlaceDetailsResponseCache.delete(oldest);
+        }
+        return details;
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw makeHttpError(504, 'Google Maps mobile place photos request timed out');
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeout);
+        richPlaceDetailsInFlight.delete(cacheKey);
+      }
+    })();
+    richPlaceDetailsInFlight.set(cacheKey, inFlight);
+  }
+
+  return inFlight;
 }

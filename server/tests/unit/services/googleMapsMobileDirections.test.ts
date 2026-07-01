@@ -107,6 +107,16 @@ function firstMessage(fields: ProtoField[], field: number): Buffer {
   return found.value;
 }
 
+function firstString(fields: ProtoField[], field: number): string | null {
+  const found = fields.find((entry) => entry.field === field && entry.wire === 2);
+  return found && Buffer.isBuffer(found.value) ? found.value.toString('utf8') : null;
+}
+
+function firstDouble(fields: ProtoField[], field: number): number | null {
+  const found = fields.find((entry) => entry.field === field && entry.wire === 1);
+  return found && Buffer.isBuffer(found.value) ? found.value.readDoubleLE(0) : null;
+}
+
 function extractMobileRouteOptions(body: Buffer): Buffer {
   for (let pos = 0; pos + 6 <= body.length; pos++) {
     if (body.readUInt16BE(pos) !== 142) continue;
@@ -115,6 +125,28 @@ function extractMobileRouteOptions(body: Buffer): Buffer {
     const root = parseMessage(body.subarray(pos + 6, pos + 6 + length));
     const route = parseMessage(firstMessage(root, 1));
     return firstMessage(route, 6);
+  }
+  throw new Error('Missing type 142 route chunk');
+}
+
+function extractMobileRouteWaypoints(body: Buffer): Array<{ text: string | null; lat: number | null; lng: number | null }> {
+  for (let pos = 0; pos + 6 <= body.length; pos++) {
+    if (body.readUInt16BE(pos) !== 142) continue;
+    const length = body.readUInt32BE(pos + 2);
+    if (length <= 0 || pos + 6 + length > body.length) continue;
+    const root = parseMessage(body.subarray(pos + 6, pos + 6 + length));
+    const route = parseMessage(firstMessage(root, 1));
+    return route
+      .filter((entry) => entry.field === 1 && entry.wire === 2 && Buffer.isBuffer(entry.value))
+      .map((entry) => {
+        const waypoint = parseMessage(entry.value as Buffer);
+        const coordinates = parseMessage(firstMessage(waypoint, 3));
+        return {
+          text: firstString(waypoint, 1),
+          lat: firstDouble(coordinates, 3),
+          lng: firstDouble(coordinates, 4),
+        };
+      });
   }
   throw new Error('Missing type 142 route chunk');
 }
@@ -145,23 +177,25 @@ function sampleOverviewGeometry(points: Array<{ lat: number; lng: number }>): Bu
   return messageField(8, [bytesField(1, packedVarints(latDeltas)), bytesField(2, packedVarints(lngDeltas))]);
 }
 
-function sampleMobileMmapResponse(): Buffer {
-  const overviewGeometry = sampleOverviewGeometry([
-    { lat: 35.6778606, lng: 139.763749 },
-    { lat: 35.3433356, lng: 139.1565648 },
-    { lat: 35.1700303, lng: 136.897241 },
-  ]);
+function sampleRouteSummary(): Buffer {
   const summary = messageField(11, [
     messageField(1, [varintField(1, 16_800)]),
     messageField(5, [varintField(1, 15_000), varintField(2, 21_000), stringField(3, '4 hr 10 min to 5 hr 50 min')]),
   ]);
-  const header = messageField(1, [
-    varintField(1, 0),
+  return summary;
+}
+
+function sampleRouteHeader(index = 0): Buffer {
+  return messageField(1, [
+    varintField(1, index),
     stringField(2, 'Tomei Expressway'),
     messageField(3, [varintField(1, 348_474)]),
     messageField(4, [varintField(1, 16_800)]),
-    summary,
+    sampleRouteSummary(),
   ]);
+}
+
+function sampleRouteDetails(): Buffer {
   const money = messageField(1, [stringField(1, 'JPY'), varintField(2, 8_620), varintField(3, 0)]);
   const moneyContainer = messageField(6, [money, stringField(2, '\u00a58620')]);
   const tollDetail = messageField(1, [
@@ -170,9 +204,33 @@ function sampleMobileMmapResponse(): Buffer {
     stringField(4, 'ETC'),
     moneyContainer,
   ]);
-  const details = messageField(2, [messageField(10, [tollDetail])]);
-  const routeWrapper = messageField(2, [header, details]);
-  const protobuf = messageField(1, [messageField(1, [routeWrapper, overviewGeometry])]);
+  const turnStep = messageField(20, [
+    stringField(
+      2,
+      "<step maneuver='TURN' meters='1996'>Turn <turn side='RIGHT'>right</turn> at <intersectionlist><intersection lang='ja'>赤池２丁目北（交差点）</intersection></intersectionlist></step>",
+    ),
+  ]);
+  const rampStep = messageField(20, [
+    stringField(
+      2,
+      "<step maneuver='ON_RAMP' meters='91'>Use the left lane to take the <signlist><sign lang='en'>Mei-Nikan Expy</sign></signlist> ramp</step>",
+    ),
+  ]);
+  return messageField(2, [messageField(10, [tollDetail]), turnStep, rampStep]);
+}
+
+function sampleMobileMmapResponse(options: { duplicateHeaderWithoutToll?: boolean } = {}): Buffer {
+  const overviewGeometry = sampleOverviewGeometry([
+    { lat: 35.6778606, lng: 139.763749 },
+    { lat: 35.3433356, lng: 139.1565648 },
+    { lat: 35.1700303, lng: 136.897241 },
+  ]);
+  const routeWrapper = messageField(2, [sampleRouteHeader(), sampleRouteDetails()]);
+  const routeContainers = [messageField(1, [routeWrapper, overviewGeometry])];
+  if (options.duplicateHeaderWithoutToll) {
+    routeContainers.push(messageField(1, [sampleRouteHeader(8)]));
+  }
+  const protobuf = messageField(1, routeContainers);
   return Buffer.concat([Buffer.from([0, 24]), gzipSync(protobuf)]);
 }
 
@@ -236,6 +294,23 @@ describe('googleMapsMobileDirections wrapper', () => {
     expect(firstVarint(avoidFerries, 7)).toBe(1);
   });
 
+  it('normalizes numeric coordinate text before building the mobile route payload', () => {
+    const built = buildGoogleMapsMobileDirectionsRequest({
+      from: { lat: 35.433918, lng: 136.78207129999998 },
+      to: { lat: 35.388360399999996, lng: 136.9391766 },
+      options: { includeDebug: true },
+    });
+
+    expect(built.body.includes(Buffer.from('35.433918,136.7820713'))).toBe(true);
+    expect(built.body.includes(Buffer.from('35.3883604,136.9391766'))).toBe(true);
+    expect(built.body.includes(Buffer.from('136.78207129999998'))).toBe(false);
+    expect(built.body.includes(Buffer.from('35.388360399999996'))).toBe(false);
+    expect(extractMobileRouteWaypoints(built.body)).toEqual([
+      { text: '35.433918,136.7820713', lat: 35.433918, lng: 136.7820713 },
+      { text: '35.3883604,136.9391766', lat: 35.3883604, lng: 136.9391766 },
+    ]);
+  });
+
   it('parses optimistic/pessimistic predictions and structured ETC toll fee', () => {
     const result = parseGoogleMapsMobileDirectionsResponse(sampleMobileMmapResponse(), { includeDebug: true });
 
@@ -259,11 +334,51 @@ describe('googleMapsMobileDirections wrapper', () => {
         { lat: 35.3433356, lng: 139.1565648 },
         { lat: 35.1700303, lng: 136.897241 },
       ],
+      steps: [
+        {
+          instruction: 'Turn right at 赤池２丁目北（交差点）',
+          maneuver: 'TURN',
+          distance: { meters: 1996, text: null },
+        },
+        {
+          instruction: 'Use the left lane to take the Mei-Nikan Expy ramp',
+          maneuver: 'ON_RAMP',
+          distance: { meters: 91, text: null },
+        },
+      ],
     });
     expect(result.optimisticDuration?.seconds).toBe(15000);
     expect(result.pessimisticDuration?.seconds).toBe(21000);
     expect(result.tollFee?.amount).toBe(8620);
     expect(result.debug?.gzipOffset).toBe(2);
+  });
+
+  it('deduplicates header-only route repeats and preserves parsed ETC tolls', () => {
+    const result = parseGoogleMapsMobileDirectionsResponse(
+      sampleMobileMmapResponse({ duplicateHeaderWithoutToll: true }),
+      { includeDebug: true },
+    );
+
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]).toMatchObject({
+      title: 'Tomei Expressway',
+      tollFee: {
+        amount: 8620,
+        text: '\u00a58620',
+        currency: 'JPY',
+        label: 'ETC',
+      },
+    });
+  });
+
+  it('parses routes from a later gzip protobuf when the response starts with metadata', () => {
+    const metadata = Buffer.concat([Buffer.from([0, 1]), gzipSync(messageField(99, [varintField(1, 1)]))]);
+    const response = Buffer.concat([metadata, Buffer.from([0xaa, 0xbb]), sampleMobileMmapResponse()]);
+    const result = parseGoogleMapsMobileDirectionsResponse(response, { includeDebug: true });
+
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]?.title).toBe('Tomei Expressway');
+    expect(result.debug?.gzipOffset).toBeGreaterThan(metadata.length);
   });
 
   it('posts the generated binary request to the mobile mmap endpoint', async () => {

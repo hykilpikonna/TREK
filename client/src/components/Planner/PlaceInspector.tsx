@@ -1,22 +1,32 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import ReactDOM from 'react-dom'
 import { openFile } from '../../utils/fileDownload'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
-import { X, Clock, MapPin, ExternalLink, Phone, Euro, Edit2, Trash2, Plus, Minus, ChevronDown, ChevronUp, FileText, Upload, File, FileImage, Star, Navigation, Users, Mountain, TrendingUp } from 'lucide-react'
+import { X, Clock, MapPin, ExternalLink, Phone, Euro, Edit2, Trash2, Plus, Minus, ChevronDown, ChevronUp, FileText, Upload, File, FileImage, Star, Navigation, Users, Mountain, TrendingUp, Info, Accessibility, MessageSquare, Image as ImageIcon, BarChart3 } from 'lucide-react'
 import PlaceAvatar from '../shared/PlaceAvatar'
+import PhotoLightbox from '../Journey/PhotoLightbox'
 import { mapsApi } from '../../api/client'
 import { useSettingsStore } from '../../store/settingsStore'
 import { getCategoryIcon, isEmojiCategoryIcon } from '../shared/categoryIcons'
 import { useToast } from '../shared/Toast'
 import { useTranslation } from '../../i18n'
-import type { Place, Category, Day, Assignment, Reservation, TripFile, AssignmentsMap } from '../../types'
+import type { Place, Category, Day, Assignment, Reservation, TripFile, AssignmentsMap, DistanceUnit } from '../../types'
 import { splitReservationDateTime, formatTime } from '../../utils/formatters'
 import { getGoogleMapsUrlForPlace } from './placeGoogleMaps'
 import { formatDurationInput, parseDurationMinutes } from '../../utils/durationInput'
 import { formatDistance, formatElevation } from '../../utils/units'
+import { buildActivitySchedule } from '../../utils/daySchedule'
+import { parseTimeToMinutes } from '../../utils/dayMerge'
 
 const detailsCache = new Map()
+const INFO_BLOCK_CLASS = 'mb-2 break-inside-avoid rounded-[10px] bg-surface-hover px-3 py-2.5'
+const INFO_BLOCK_FLUSH_CLASS = 'mb-2 break-inside-avoid overflow-hidden rounded-[10px] bg-surface-hover'
+const INFO_BLOCK_HEADER_CLASS = 'mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-content-secondary'
+const POPULAR_TIME_HIGHLIGHT_COLOR = 'var(--journal-accent)'
+
+type TFunction = (key: string, params?: Record<string, string | number>) => string
 
 function getSessionCache(key) {
   try {
@@ -29,21 +39,25 @@ function setSessionCache(key, value) {
   try { sessionStorage.setItem(key, JSON.stringify(value)) } catch {}
 }
 
-function usePlaceDetails(googlePlaceId, osmId, language) {
+function usePlaceDetails(googlePlaceId, googleFtid, osmId, language) {
   const [details, setDetails] = useState(null)
-  const detailId = googlePlaceId || osmId
-  const cacheKey = `gdetails_${detailId}_${language}`
+  const detailId = googlePlaceId || googleFtid || osmId
+  const cacheKey = `gdetails_v11_expanded_${detailId}_${language}`
   useEffect(() => {
     if (!detailId) { setDetails(null); return }
     if (detailsCache.has(cacheKey)) { setDetails(detailsCache.get(cacheKey)); return }
     const cached = getSessionCache(cacheKey)
     if (cached) { detailsCache.set(cacheKey, cached); setDetails(cached); return }
-    mapsApi.details(detailId, language).then(data => {
+    let cancelled = false
+    setDetails(null)
+    mapsApi.details(detailId, language, { expand: true }).then(data => {
+      if (cancelled) return
       detailsCache.set(cacheKey, data.place)
       setSessionCache(cacheKey, data.place)
       setDetails(data.place)
     }).catch(() => {})
-  }, [detailId, language])
+    return () => { cancelled = true }
+  }, [detailId, language, cacheKey])
   return details
 }
 
@@ -52,6 +66,31 @@ function getWeekdayIndex(dateStr) {
   const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
   const jsDay = d.getDay()
   return jsDay === 0 ? 6 : jsDay - 1
+}
+
+function getPopularWeekdayIndex(dateStr) {
+  const d = dateStr ? new Date(dateStr + 'T12:00:00') : new Date()
+  return d.getDay()
+}
+
+interface PopularTimesSchedule {
+  day: number | null
+  startHour: number | null
+  endHour: number | null
+  label: string | null
+}
+
+function isScheduledPopularHour(day: number, hour: number, schedule?: PopularTimesSchedule | null): boolean {
+  if (!schedule || schedule.day !== day || schedule.startHour == null || schedule.endHour == null) return false
+  if (schedule.endHour <= 24) return hour >= schedule.startHour && hour < schedule.endHour
+  return hour >= schedule.startHour || hour < (schedule.endHour % 24)
+}
+
+function popularBarBackground(percent: number, peak: number, scheduled: boolean): string {
+  if (scheduled) return POPULAR_TIME_HIGHLIGHT_COLOR
+  if (percent <= 0) return 'color-mix(in srgb, var(--text-faint) 34%, transparent)'
+  if (percent === peak) return 'color-mix(in srgb, var(--accent) 76%, var(--text-primary))'
+  return 'color-mix(in srgb, var(--accent) 44%, var(--text-muted))'
 }
 
 function convertHoursLine(line, timeFormat) {
@@ -78,6 +117,131 @@ function convertHoursLine(line, timeFormat) {
     })
   }
   return line
+}
+
+function cleanText(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function humanizeType(value) {
+  const text = cleanText(value)
+  if (!text) return null
+  const cleaned = text.replace(/^SearchResult\.TYPE_/i, '').replace(/^gcid:/i, '').replace(/_/g, ' ').toLowerCase()
+  return cleaned.replace(/\b\w/g, c => c.toUpperCase())
+}
+
+function photoUrlFromRecord(photo: unknown): string | null {
+  if (!photo || typeof photo !== 'object') return null
+  const record = photo as Record<string, unknown>
+  for (const key of ['url', 'photoUrl', 'src']) {
+    const value = cleanText(record[key])
+    if (value) return value
+  }
+  return null
+}
+
+function largeGooglePhotoUrl(url: string): string {
+  const cleaned = url.trim().replace(/[:;),\]]+\d*$/g, '')
+  let parsed: URL
+  try {
+    parsed = new URL(cleaned)
+  } catch {
+    return url
+  }
+
+  if (!parsed.hostname.endsWith('googleusercontent.com')) return url
+  if (!/(?:^|\/)(?:gps|gpms|grass)-cs-s\//.test(parsed.pathname)) return url
+  if (/\/a-|photo\.jpg|=mm|manifest|googlevideo/i.test(cleaned)) return url
+
+  const variantIndex = cleaned.lastIndexOf('=')
+  if (variantIndex <= cleaned.lastIndexOf('/')) return url
+  return `${cleaned.slice(0, variantIndex)}=w2048-h2048-k-no`
+}
+
+function fullPhotoUrlFromRecord(photo: unknown): string | null {
+  if (!photo || typeof photo !== 'object') return null
+  const record = photo as Record<string, unknown>
+  for (const key of ['full_url', 'fullUrl', 'large_url', 'largeUrl', 'original_url', 'originalUrl']) {
+    const value = cleanText(record[key])
+    if (value) return value
+  }
+  const previewUrl = photoUrlFromRecord(photo)
+  return previewUrl ? largeGooglePhotoUrl(previewUrl) : null
+}
+
+function photoIdentityKey(url: string): string {
+  const cleaned = url.trim().replace(/[:;),\]]+\d*$/g, '')
+  try {
+    const parsed = new URL(cleaned)
+    if (parsed.hostname.endsWith('googleusercontent.com')) {
+      const pathKey = `${parsed.origin}${parsed.pathname}`
+      const variantIndex = pathKey.lastIndexOf('=')
+      return variantIndex > pathKey.lastIndexOf('/') ? pathKey.slice(0, variantIndex) : pathKey
+    }
+    parsed.hash = ''
+    parsed.search = ''
+    return parsed.toString()
+  } catch {
+    return cleaned.replace(/[?#].*$/, '').replace(/=[^=/?#]+$/, '')
+  }
+}
+
+function photoCandidateFromValue(value: unknown): { previewUrl: string; fullUrl: string } | null {
+  const previewUrl = typeof value === 'string' ? cleanText(value) : photoUrlFromRecord(value)
+  if (!previewUrl) return null
+  const fullUrl = typeof value === 'string' ? largeGooglePhotoUrl(previewUrl) : fullPhotoUrlFromRecord(value) || largeGooglePhotoUrl(previewUrl)
+  return { previewUrl, fullUrl }
+}
+
+function uniquePhotoCandidates(...sources: Array<string | null | undefined | unknown[]>): Array<{ previewUrl: string; fullUrl: string }> {
+  const photos: Array<{ previewUrl: string; fullUrl: string }> = []
+  const seen = new Set<string>()
+  for (const source of sources) {
+    const values = Array.isArray(source) ? source : [source]
+    for (const value of values) {
+      const photo = photoCandidateFromValue(value)
+      if (!photo) continue
+      const key = photoIdentityKey(photo.previewUrl)
+      if (seen.has(key)) continue
+      seen.add(key)
+      photos.push(photo)
+    }
+  }
+  return photos
+}
+
+function mergePhotoCandidates(...sources: Array<Array<{ previewUrl: string; fullUrl: string }>>): Array<{ previewUrl: string; fullUrl: string }> {
+  const photos: Array<{ previewUrl: string; fullUrl: string }> = []
+  const seen = new Set<string>()
+  for (const source of sources) {
+    for (const photo of source) {
+      const key = photoIdentityKey(photo.previewUrl)
+      if (seen.has(key)) continue
+      seen.add(key)
+      photos.push(photo)
+    }
+  }
+  return photos
+}
+
+function isPlacePhotoProxyUrl(url: string): boolean {
+  return /(^|\/)api\/maps\/place-photo\/.+\/bytes(?:$|[?#])/.test(url)
+}
+
+function uniqueNameParts(...values) {
+  const out = []
+  for (const value of values) {
+    const text = cleanText(value)
+    if (!text) continue
+    if (out.some(existing => existing.localeCompare(text, undefined, { sensitivity: 'accent' }) === 0)) continue
+    out.push(text)
+  }
+  return out
+}
+
+function weekdayName(day, locale) {
+  const base = new Date(Date.UTC(2026, 5, 28 + day, 12))
+  return base.toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' })
 }
 
 function formatFileSize(bytes) {
@@ -113,6 +277,7 @@ interface PlaceInspectorProps {
   onSetParticipants: (assignmentId: number, dayId: number, participantIds: number[]) => void
   onUpdatePlace: (placeId: number, data: Partial<Place>) => void
   onUpdateAssignmentDuration?: (assignmentId: number, dayId: number, durationMinutes: number) => Promise<void> | void
+  scheduleMarginMinutes?: number
   leftWidth?: number
   rightWidth?: number
 }
@@ -122,6 +287,7 @@ export default function PlaceInspector({
   onClose, onEdit, onDelete, onAssignToDay, onRemoveAssignment,
   files, onFileUpload, tripMembers = [], onSetParticipants, onUpdatePlace,
   onUpdateAssignmentDuration,
+  scheduleMarginMinutes = 0,
   leftWidth = 0, rightWidth = 0,
 }: PlaceInspectorProps) {
   const { t, locale, language } = useTranslation()
@@ -133,9 +299,9 @@ export default function PlaceInspector({
   const [isUploading, setIsUploading] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [nameValue, setNameValue] = useState('')
-  const nameInputRef = useRef(null)
-  const fileInputRef = useRef(null)
-  const googleDetails = usePlaceDetails(place?.google_place_id, place?.osm_id, language)
+  const nameInputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const googleDetails = usePlaceDetails(place?.google_place_id, place?.google_ftid, place?.osm_id, language)
 
   const startNameEdit = () => {
     if (!onUpdatePlace) return
@@ -152,7 +318,7 @@ export default function PlaceInspector({
     onUpdatePlace(place.id, { name: trimmed })
   }
 
-  const handleNameKeyDown = (e) => {
+  const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') { e.preventDefault(); commitNameEdit() }
     if (e.key === 'Escape') setEditingName(false)
   }
@@ -170,16 +336,52 @@ export default function PlaceInspector({
   const openNow = googleDetails?.open_now ?? null
   // Prefer the place's stored ftid; if it has none yet, use the one just fetched from Google.
   const googleMapsUrl = getGoogleMapsUrlForPlace(
-    place ? { ...place, google_ftid: place.google_ftid || googleDetails?.google_ftid || null } : null,
+    { ...place, google_ftid: place.google_ftid || googleDetails?.google_ftid || null },
     googleDetails?.google_maps_url,
   )
+  const displayAddress = cleanText(googleDetails?.written_address)
+    || cleanText(googleDetails?.address_translated)
+    || cleanText(googleDetails?.address)
+    || place.address
+  const translatedName = cleanText(googleDetails?.name_translated) || cleanText(googleDetails?.name)
+  const originalName = cleanText(googleDetails?.name_original)
+  const secondaryNames = uniqueNameParts(translatedName, originalName).filter(name => name !== place.name)
+  const placeType = humanizeType(googleDetails?.type || googleDetails?.types?.[0] || googleDetails?.primary_type)
+  const accessibility = Array.isArray(googleDetails?.accessibility) ? googleDetails.accessibility : []
+  const reviews = Array.isArray(googleDetails?.reviews) ? googleDetails.reviews.filter(r => r?.text || r?.author) : []
+  const popularTimes = Array.isArray(googleDetails?.popular_times) ? googleDetails.popular_times : []
+  const popularStatus = cleanText(googleDetails?.popular_status)
+  const photoCount = Array.isArray(googleDetails?.photos) ? googleDetails.photos.length : 0
+  const phoneLabel = t('inspector.phone') === 'inspector.phone' ? 'Phone' : t('inspector.phone')
+  const summaryText = place.description || googleDetails?.summary || ''
   const selectedDay = days?.find(d => d.id === selectedDayId)
   const weekdayIndex = getWeekdayIndex(selectedDay?.date)
+  const normalizedScheduleMargin = Math.max(0, Math.round(Number(scheduleMarginMinutes) || 0))
+  const scheduledSlot = useMemo(() => {
+    if (!selectedDay || !assignmentInDay) return null
+    const sortedAssignments = [...dayAssignments].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+    const schedule = buildActivitySchedule(selectedDay, sortedAssignments, { scheduleMarginMinutes: normalizedScheduleMargin })
+    return schedule[assignmentInDay.id] || null
+  }, [assignmentInDay, dayAssignments, normalizedScheduleMargin, selectedDay])
+  const popularSchedule = useMemo<PopularTimesSchedule>(() => {
+    const day = selectedDay?.date ? getPopularWeekdayIndex(selectedDay.date) : null
+    if (!scheduledSlot) return { day, startHour: null, endHour: null, label: null }
+    const startMinutes = parseTimeToMinutes(scheduledSlot.start)
+    const endMinutes = parseTimeToMinutes(scheduledSlot.end)
+    if (startMinutes == null || endMinutes == null) return { day, startHour: null, endHour: null, label: null }
+    const endAbsolute = endMinutes > startMinutes ? endMinutes : endMinutes + 24 * 60
+    return {
+      day,
+      startHour: Math.floor(startMinutes / 60),
+      endHour: Math.max(Math.floor(startMinutes / 60) + 1, Math.ceil(endAbsolute / 60)),
+      label: `${formatTime(scheduledSlot.start, locale, timeFormat)} - ${formatTime(scheduledSlot.end, locale, timeFormat)}`,
+    }
+  }, [locale, scheduledSlot, selectedDay?.date, timeFormat])
 
   const placeFiles = (files || []).filter(f => String(f.place_id) === String(place.id) || (f.linked_place_ids || []).includes(place.id))
 
-  const handleFileUpload = useCallback(async (e) => {
-    const selectedFiles = Array.from((e.target as HTMLInputElement).files || [])
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || [])
     if (!selectedFiles.length || !onFileUpload) return
     setIsUploading(true)
     try {
@@ -211,97 +413,117 @@ export default function PlaceInspector({
         fontFamily: "var(--font-system)",
       }}
     >
-      <div className="bg-surface-elevated" style={{
-        backdropFilter: 'blur(40px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(40px) saturate(180%)',
-        borderRadius: 20,
-        boxShadow: '0 8px 40px rgba(0,0,0,0.14), 0 0 0 1px rgba(0,0,0,0.06)',
-        overflow: 'hidden',
-        maxHeight: '60vh',
-        display: 'flex',
-        flexDirection: 'column',
-      }}>
+      <div className="flex max-h-[60vh] flex-col overflow-hidden rounded-[20px] bg-surface-elevated shadow-[0_8px_40px_rgba(0,0,0,0.14),0_0_0_1px_rgba(0,0,0,0.06)] [backdrop-filter:blur(40px)_saturate(180%)] [-webkit-backdrop-filter:blur(40px)_saturate(180%)]">
         {/* Header */}
         <PlaceInspectorHeader openNow={openNow} place={place} category={category} t={t} editingName={editingName}
           nameInputRef={nameInputRef} nameValue={nameValue} setNameValue={setNameValue} commitNameEdit={commitNameEdit}
           handleNameKeyDown={handleNameKeyDown} startNameEdit={startNameEdit} onUpdatePlace={onUpdatePlace}
-          locale={locale} timeFormat={timeFormat} onClose={onClose} />
+          onClose={onClose} secondaryNames={secondaryNames} displayAddress={displayAddress} />
 
-        {/* Content — scrollable */}
-        <div data-testid="inspector-scroll" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Content */}
+        <div data-testid="inspector-scroll" className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-hidden px-4 py-3">
 
           {/* Info-Chips — hidden on mobile, shown on desktop */}
-          <div className="hidden sm:flex" style={{ flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            {googleDetails?.rating && (() => {
-              const shortReview = (googleDetails.reviews || []).find(r => r.text && r.text.length > 5)
-              return (
-                <Chip
-                  icon={<Star size={12} fill="#facc15" color="#facc15" />}
-                  text={<>
-                    {googleDetails.rating.toFixed(1)}
-                    {googleDetails.rating_count ? <span style={{ opacity: 0.5 }}> ({googleDetails.rating_count.toLocaleString(locale)})</span> : ''}
-                    {shortReview && <span className="hidden md:inline" style={{ opacity: 0.6, fontWeight: 400, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}> · „{shortReview.text}"</span>}
-                  </>}
-                  color="var(--text-secondary)" bg="var(--bg-hover)"
-                />
-              )
-            })()}
+          <div className="hidden shrink-0 flex-wrap items-center gap-1.5 sm:flex">
+            {placeType && (
+              <Chip icon={<Info size={12} />} text={placeType} color="var(--text-secondary)" bg="var(--bg-hover)" />
+            )}
+            {googleDetails?.rating && (
+              <Chip
+                icon={<Star size={12} fill="#facc15" color="#facc15" />}
+                text={<>
+                  {googleDetails.rating.toFixed(1)}
+                  {googleDetails.rating_count ? <span className="opacity-50"> ({googleDetails.rating_count.toLocaleString(locale)})</span> : null}
+                </>}
+                color="var(--text-secondary)" bg="var(--bg-hover)"
+              />
+            )}
             {place.price > 0 && (
               <Chip icon={<Euro size={12} />} text={`${place.price} ${place.currency || '€'}`} color="#059669" bg="#ecfdf5" />
             )}
+            {googleDetails?.accessible !== null && googleDetails?.accessible !== undefined && (
+              <Chip
+                icon={<Accessibility size={12} />}
+                text={googleDetails.accessible ? t('inspector.accessible') : t('inspector.accessibilityLimited')}
+                color={googleDetails.accessible ? '#047857' : '#b45309'}
+                bg={googleDetails.accessible ? '#ecfdf5' : '#fffbeb'}
+              />
+            )}
           </div>
 
-          {assignmentInDay && selectedDayId && (
-            <AssignmentDurationControl
-              assignment={assignmentInDay}
-              dayId={selectedDayId}
-              placeDurationMinutes={place.duration_minutes}
-              onUpdateAssignmentDuration={onUpdateAssignmentDuration}
-              t={t}
-            />
-          )}
+          <PlacePhotoPreview place={place} details={googleDetails} photoCount={photoCount} t={t} />
 
-          {/* Telefon */}
-          {(place.phone || googleDetails?.phone) && (
-            <div style={{ display: 'flex', gap: 12 }}>
-              <a href={`tel:${place.phone || googleDetails.phone}`}
-                className="text-content"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, textDecoration: 'none' }}>
-                <Phone size={12} /> {place.phone || googleDetails.phone}
-              </a>
+          <div data-testid="inspector-info-scroll" className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]">
+            <div data-testid="inspector-info-columns" className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:items-start">
+              <div data-testid="inspector-info-left" className="min-w-0">
+                {assignmentInDay && selectedDayId && (
+                  <AssignmentDurationControl
+                    assignment={assignmentInDay}
+                    dayId={selectedDayId}
+                    placeDurationMinutes={place.duration_minutes}
+                    onUpdateAssignmentDuration={onUpdateAssignmentDuration}
+                    t={t}
+                  />
+                )}
+
+                <AccessibilityDetailsBlock accessibility={accessibility} t={t} />
+
+                {/* Phone */}
+                {(place.phone || googleDetails?.phone) && (
+                  <InfoBlock>
+                    <InfoBlockHeader icon={<Phone size={13} className="text-content-faint" />} title={phoneLabel} />
+                    <a
+                      href={`tel:${place.phone || googleDetails.phone}`}
+                      className="inline-flex items-center gap-1 text-xs text-content no-underline [word-break:break-word]"
+                    >
+                      {place.phone || googleDetails.phone}
+                    </a>
+                  </InfoBlock>
+                )}
+
+                {/* Notes */}
+                {place.notes && (
+                  <InfoBlock className="collab-note-md text-xs leading-[1.5] text-content-muted [overflow-wrap:anywhere] [word-break:break-word]">
+                    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{place.notes}</Markdown>
+                  </InfoBlock>
+                )}
+
+                <PlaceReservationParticipants selectedAssignmentId={selectedAssignmentId} reservations={reservations}
+                  assignments={assignments} selectedDayId={selectedDayId} tripMembers={tripMembers} locale={locale}
+                  timeFormat={timeFormat} t={t} onSetParticipants={onSetParticipants} />
+
+                <PlaceExtras openingHours={openingHours} weekdayIndex={weekdayIndex} hoursExpanded={hoursExpanded}
+                  setHoursExpanded={setHoursExpanded} timeFormat={timeFormat} t={t} place={place} placeFiles={placeFiles}
+                  onFileUpload={onFileUpload} filesExpanded={filesExpanded} setFilesExpanded={setFilesExpanded}
+                  fileInputRef={fileInputRef} handleFileUpload={handleFileUpload} isUploading={isUploading}
+                  distanceUnit={distanceUnit} />
+              </div>
+
+              <div data-testid="inspector-info-right" className="min-w-0">
+                {/* Description / Summary */}
+                {summaryText && (
+                  <InfoBlock testId="inspector-summary" className="collab-note-md text-xs leading-[1.5] text-content-muted [overflow-wrap:anywhere] [word-break:break-word]">
+                    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{summaryText}</Markdown>
+                  </InfoBlock>
+                )}
+
+                <GoogleDetailsSections
+                  reviews={reviews}
+                  popularTimes={popularTimes}
+                  popularStatus={popularStatus}
+                  popularSchedule={popularSchedule}
+                  locale={locale}
+                  timeFormat={timeFormat}
+                  t={t}
+                />
+              </div>
             </div>
-          )}
-
-          {/* Description / Summary */}
-          {(place.description || googleDetails?.summary) && (
-            <div className="collab-note-md bg-surface-hover text-content-muted" style={{ borderRadius: 10, overflow: 'hidden', flexShrink: 0, fontSize: 12, lineHeight: '1.5', padding: '8px 12px', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-              <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{place.description || googleDetails?.summary || ''}</Markdown>
-            </div>
-          )}
-
-          {/* Notes */}
-          {place.notes && (
-            <div className="collab-note-md bg-surface-hover text-content-muted" style={{ borderRadius: 10, overflow: 'hidden', flexShrink: 0, fontSize: 12, lineHeight: '1.5', padding: '8px 12px', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-              <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{place.notes}</Markdown>
-            </div>
-          )}
-
-          {/* Reservation + Participants — side by side */}
-          <PlaceReservationParticipants selectedAssignmentId={selectedAssignmentId} reservations={reservations}
-            assignments={assignments} selectedDayId={selectedDayId} tripMembers={tripMembers} locale={locale}
-            timeFormat={timeFormat} t={t} onSetParticipants={onSetParticipants} />
-
-          {/* Opening hours + Files — side by side on desktop only if both exist */}
-          <PlaceExtras openingHours={openingHours} weekdayIndex={weekdayIndex} hoursExpanded={hoursExpanded}
-            setHoursExpanded={setHoursExpanded} timeFormat={timeFormat} t={t} place={place} placeFiles={placeFiles}
-            onFileUpload={onFileUpload} filesExpanded={filesExpanded} setFilesExpanded={setFilesExpanded}
-            fileInputRef={fileInputRef} handleFileUpload={handleFileUpload} isUploading={isUploading}
-            distanceUnit={distanceUnit} />
+          </div>
 
         </div>
 
         {/* Footer actions */}
-        <div className="border-t border-edge-faint" style={{ padding: '10px 16px', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-edge-faint px-4 py-2.5">
           {selectedDayId && (
             assignmentInDay ? (
               <ActionButton onClick={() => onRemoveAssignment(selectedDayId, assignmentInDay.id)} variant="ghost" icon={<Minus size={13} />}
@@ -318,7 +540,7 @@ export default function PlaceInspector({
             <ActionButton onClick={() => window.open(place.website || googleDetails?.website, '_blank')} variant="ghost" icon={<ExternalLink size={13} />}
               label={<span className="hidden sm:inline">{t('inspector.website')}</span>} />
           )}
-          <div style={{ flex: 1 }} />
+          <div className="flex-1" />
           <ActionButton onClick={onEdit} variant="ghost" icon={<Edit2 size={13} />} label={<span className="hidden sm:inline">{t('common.edit')}</span>} />
           <ActionButton onClick={onDelete} variant="danger" icon={<Trash2 size={13} />} label={<span className="hidden sm:inline">{t('common.delete')}</span>} />
         </div>
@@ -336,24 +558,392 @@ interface ChipProps {
 
 function Chip({ icon, text, color = 'var(--text-secondary)', bg = 'var(--bg-hover)' }: ChipProps) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 99, background: bg, color, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-      <span style={{ flexShrink: 0, display: 'flex' }}>{icon}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span>
+    <div
+      className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-[9px] py-[3px] text-xs"
+      style={{ background: bg, color }}
+    >
+      <span className="flex shrink-0">{icon}</span>
+      <span className="truncate">{text}</span>
     </div>
   )
 }
 
-interface RowProps {
-  icon: React.ReactNode
+interface InfoBlockProps {
   children: React.ReactNode
+  className?: string
+  testId?: string
 }
 
-function Row({ icon, children }: RowProps) {
+function InfoBlock({ children, className = '', testId }: InfoBlockProps) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{ flexShrink: 0 }}>{icon}</div>
-      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+    <div data-testid={testId} className={`${INFO_BLOCK_CLASS}${className ? ` ${className}` : ''}`}>
+      {children}
     </div>
+  )
+}
+
+interface InfoBlockHeaderProps {
+  icon: React.ReactNode
+  title: React.ReactNode
+  className?: string
+}
+
+function InfoBlockHeader({ icon, title, className = '' }: InfoBlockHeaderProps) {
+  return (
+    <div className={`${INFO_BLOCK_HEADER_CLASS}${className ? ` ${className}` : ''}`}>
+      {icon} {title}
+    </div>
+  )
+}
+
+function InfoBlockLabel({ icon, title, htmlFor }: InfoBlockHeaderProps & { htmlFor: string }) {
+  return (
+    <label htmlFor={htmlFor} className={INFO_BLOCK_HEADER_CLASS}>
+      {icon} {title}
+    </label>
+  )
+}
+
+function PlacePhotoPreview({ place, details, photoCount, t }: { place: Place; details: Record<string, unknown> | null; photoCount: number; t: TFunction }) {
+  const [photoUrl, setPhotoUrl] = useState(place.image_url || null)
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const directPhotoRecords = Array.isArray(details?.photos) ? details.photos : []
+  const directPhotoCandidates = uniquePhotoCandidates(directPhotoRecords)
+  const directPhotoUrlCount = directPhotoCandidates.length
+  const fallbackPhotoCandidates = uniquePhotoCandidates(place.image_url, photoUrl)
+    .filter(photo => directPhotoUrlCount === 0 || !isPlacePhotoProxyUrl(photo.previewUrl))
+  const photoCandidates = mergePhotoCandidates(directPhotoCandidates, fallbackPhotoCandidates)
+  const lightboxPhotos = photoCandidates.map((photo, index) => ({
+    id: `${place.id}-${index}-${photo.fullUrl}`,
+    src: photo.fullUrl,
+    caption: place.name,
+  }))
+  const photoId = cleanText(details?.google_place_id)
+    || cleanText(details?.google_ftid)
+    || cleanText(place.google_place_id)
+    || cleanText(place.google_ftid)
+    || cleanText(place.osm_id)
+  const photoLat = typeof details?.lat === 'number' ? details.lat : place.lat
+  const photoLng = typeof details?.lng === 'number' ? details.lng : place.lng
+  const photoName = cleanText(details?.name) || place.name
+
+  useEffect(() => {
+    let cancelled = false
+    setPhotoUrl(place.image_url || null)
+    if (place.image_url || directPhotoUrlCount > 0 || !photoId) return () => { cancelled = true }
+    mapsApi.placePhoto(photoId, photoLat ?? undefined, photoLng ?? undefined, photoName)
+      .then(data => {
+        if (!cancelled && data?.photoUrl) setPhotoUrl(data.photoUrl)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [photoId, place.id, place.image_url, photoLat, photoLng, photoName, directPhotoUrlCount])
+
+  if (photoCandidates.length === 0) return null
+  const displayedPhotoCount = Math.max(photoCount, photoCandidates.length)
+
+  return (
+    <>
+      <div className="shrink-0 overflow-hidden rounded-lg border border-edge-faint bg-surface-hover">
+        <div className="flex snap-x snap-proximity gap-2 overflow-x-auto overscroll-x-contain p-2 [-webkit-overflow-scrolling:touch]">
+          {photoCandidates.map((photo, index) => (
+            <button
+              key={photo.previewUrl}
+              type="button"
+              aria-label={t('inspector.openPhoto', { index: index + 1, count: photoCandidates.length })}
+              onClick={() => setLightboxIndex(index)}
+              className="relative h-[126px] flex-[0_0_min(72vw,210px)] shrink-0 snap-start overflow-hidden rounded-[7px] border-0 bg-surface-hover p-0 text-left"
+            >
+              <img src={photo.previewUrl} alt={place.name} loading={index === 0 ? 'eager' : 'lazy'} className="block h-full w-full object-cover transition-transform duration-150 hover:scale-[1.02]" />
+              {index === 0 && displayedPhotoCount > 1 && (
+                <div className="absolute bottom-[7px] right-[7px] inline-flex items-center gap-1 rounded-full bg-[rgba(0,0,0,0.58)] px-[7px] py-[3px] text-[11px] font-semibold text-white">
+                  <ImageIcon size={12} /> {t('inspector.photosCount', { count: displayedPhotoCount })}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+      {lightboxIndex !== null && (
+        ReactDOM.createPortal(
+          <PhotoLightbox
+            key={`${place.id}-${lightboxIndex}`}
+            photos={lightboxPhotos}
+            startIndex={lightboxIndex}
+            onClose={() => setLightboxIndex(null)}
+          />,
+          document.body,
+        )
+      )}
+    </>
+  )
+}
+
+function AccessibilityDetailsBlock({ accessibility, t }: {
+  accessibility: Array<{ key?: string; label?: string; value?: boolean | null; text?: string | null }>
+  t: TFunction
+}) {
+  if (accessibility.length === 0) return null
+
+  return (
+    <InfoBlock testId="inspector-accessibility">
+      <InfoBlockHeader icon={<Accessibility size={13} className="text-content-faint" />} title={t('inspector.accessibility')} />
+      <div className="flex flex-col gap-1">
+        {accessibility.map((feature, idx) => (
+          <div key={`${feature.key || feature.label || idx}`} className="flex items-start gap-1.5 text-xs leading-[1.35] text-content-muted">
+            <span className={`font-bold ${feature.value === true ? 'text-[#16a34a]' : feature.value === false ? 'text-[#d97706]' : 'text-content-faint'}`}>
+              {feature.value === true ? '✓' : feature.value === false ? '–' : '•'}
+            </span>
+            <span>{feature.text || feature.label}</span>
+          </div>
+        ))}
+      </div>
+    </InfoBlock>
+  )
+}
+
+function GoogleDetailsSections({ reviews, popularTimes, popularStatus, popularSchedule, locale, timeFormat, t }: {
+  reviews: Array<{ author?: string | null; rating?: number | null; text?: string | null; time?: string | null; published_at?: string | null; photo?: string | null; uri?: string | null }>
+  popularTimes: Array<{ day: number; hour: number; occupancy_percent: number }>
+  popularStatus?: string | null
+  popularSchedule?: PopularTimesSchedule | null
+  locale: string
+  timeFormat: string
+  t: TFunction
+}) {
+  const showReviews = reviews.length > 0
+  const showPopularTimes = popularTimes.length > 0 || Boolean(popularStatus)
+  const [popularExpanded, setPopularExpanded] = useState(false)
+  const [reviewsOpen, setReviewsOpen] = useState(false)
+
+  useEffect(() => {
+    setPopularExpanded(false)
+  }, [popularSchedule?.day, popularSchedule?.startHour, popularSchedule?.endHour, popularTimes.length, popularStatus])
+
+  if (!showReviews && !showPopularTimes) return null
+
+  const popularByDay = new Map<number, Array<{ hour: number; occupancy_percent: number }>>()
+  for (const item of popularTimes) {
+    if (!popularByDay.has(item.day)) popularByDay.set(item.day, [])
+    popularByDay.get(item.day)!.push(item)
+  }
+  const orderedPopularDays = [1, 2, 3, 4, 5, 6, 0].filter(day => popularByDay.has(day))
+  const scheduledDay = popularSchedule?.day ?? null
+  const collapsedPopularDay = scheduledDay != null && popularByDay.has(scheduledDay)
+    ? scheduledDay
+    : (orderedPopularDays[0] ?? null)
+  const visiblePopularDays = popularExpanded ? orderedPopularDays : (collapsedPopularDay != null ? [collapsedPopularDay] : [])
+  const canExpandPopular = orderedPopularDays.length > 1
+  const collapsedSummary = collapsedPopularDay != null
+    ? [
+      weekdayName(collapsedPopularDay, locale),
+      popularSchedule?.day === collapsedPopularDay ? popularSchedule.label : null,
+    ].filter(Boolean).join(' · ')
+    : null
+
+  return (
+    <>
+      {showReviews && (
+        <InfoBlock testId="inspector-reviews">
+          <button
+            type="button"
+            onClick={() => setReviewsOpen(true)}
+            className="mb-1.5 flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-0 text-left font-[inherit]"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-content-secondary">
+              <MessageSquare size={13} className="text-content-faint" /> {t('inspector.reviews')}
+            </span>
+            <span className="text-[10px] font-medium text-content-faint">
+              {t('inspector.reviewsCount', { count: reviews.length })}
+            </span>
+          </button>
+          <div className="flex flex-col gap-2">
+            {reviews.slice(0, 2).map((review, idx) => (
+              <button
+                key={`${review.author || 'review'}-${idx}`}
+                type="button"
+                onClick={() => setReviewsOpen(true)}
+                className="block min-w-0 cursor-pointer rounded-md border-0 bg-transparent p-0 text-left font-[inherit] transition-colors hover:bg-surface-tertiary"
+              >
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-content">
+                  {review.rating ? <><Star size={11} fill="#facc15" className="text-[#facc15]" /> {review.rating}</> : null}
+                  {review.author && <span className="truncate">{review.author}</span>}
+                  {review.time && <span className="font-normal text-content-faint">{review.time}</span>}
+                </div>
+                {review.text && (
+                  <div className="mt-0.5 overflow-hidden text-xs leading-[1.4] text-content-muted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:3]">
+                    {review.text}
+                  </div>
+                )}
+              </button>
+            ))}
+            {reviews.length > 2 && (
+              <button
+                type="button"
+                onClick={() => setReviewsOpen(true)}
+                className="mt-0.5 inline-flex w-fit cursor-pointer items-center gap-1 rounded-md border-0 bg-surface-tertiary px-2 py-1 text-[11px] font-semibold text-content-secondary hover:bg-surface-card"
+              >
+                {t('inspector.viewAllReviews', { count: reviews.length })}
+              </button>
+            )}
+          </div>
+        </InfoBlock>
+      )}
+      {reviewsOpen && (
+        <ReviewsPanel reviews={reviews} onClose={() => setReviewsOpen(false)} t={t} />
+      )}
+
+      {showPopularTimes && (
+        <InfoBlock>
+          <button
+            type="button"
+            disabled={!canExpandPopular}
+            aria-expanded={canExpandPopular ? popularExpanded : undefined}
+            onClick={() => { if (canExpandPopular) setPopularExpanded(v => !v) }}
+            className="mb-2 flex w-full cursor-pointer items-center justify-between gap-2 border-0 bg-transparent p-0 text-left font-[inherit] disabled:cursor-default"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-content-secondary">
+              <BarChart3 size={13} className="shrink-0 text-content-faint" /> {t('inspector.popularTimes')}
+            </span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              {!popularExpanded && collapsedSummary && (
+                <span className="truncate text-[10px] font-medium text-content-faint">{collapsedSummary}</span>
+              )}
+              {canExpandPopular && (
+                popularExpanded
+                  ? <ChevronUp size={13} className="shrink-0 text-content-faint" />
+                  : <ChevronDown size={13} className="shrink-0 text-content-faint" />
+              )}
+            </span>
+          </button>
+          {popularStatus && (
+            <div className="mb-[7px] text-[11px] leading-[1.35] text-content-muted">
+              {popularStatus}
+            </div>
+          )}
+          <div className="flex flex-col gap-[5px]">
+            {visiblePopularDays.map(day => {
+              const values = (popularByDay.get(day) || []).slice().sort((a, b) => a.hour - b.hour)
+              if (values.length === 0) return null
+              const peak = Math.max(...values.map(v => v.occupancy_percent))
+              const byHour = new Map(values.map(v => [v.hour, v.occupancy_percent]))
+              const isScheduledDay = popularSchedule?.day === day
+              return (
+                <div key={day} data-testid={`popular-times-day-${day}`} className="grid grid-cols-[34px_minmax(0,1fr)_34px] items-center gap-1.5">
+                  <span className="text-[10px] font-semibold text-content-faint">{weekdayName(day, locale)}</span>
+                  <div className="grid h-7 grid-cols-[repeat(24,minmax(2px,1fr))] items-end gap-0.5">
+                    {Array.from({ length: 24 }, (_, hour) => {
+                      const percent = byHour.get(hour) ?? 0
+                      const scheduled = isScheduledPopularHour(day, hour, popularSchedule)
+                      const hourLabel = formatTime(`${String(hour).padStart(2, '0')}:00`, locale, timeFormat)
+                      const tooltip = `${weekdayName(day, locale)} ${hourLabel} · ${percent}%`
+                      const barHeight = scheduled
+                        ? Math.max(8, percent > 0 ? Math.max(5, percent * 0.28) : 3)
+                        : (percent > 0 ? Math.max(5, percent * 0.28) : 3)
+                      return (
+                        <div key={`${day}-${hour}`} className="group relative flex h-7 items-end" title={tooltip}>
+                          <div
+                            data-testid={`popular-time-slot-${day}-${hour}`}
+                            aria-label={tooltip}
+                            className="w-full rounded-sm transition-[height,background]"
+                            style={{
+                              height: `${barHeight}px`,
+                              background: popularBarBackground(percent, peak, scheduled),
+                            }}
+                          />
+                          <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-content px-1.5 py-1 text-[10px] font-semibold text-surface shadow-lg group-hover:block">
+                            {tooltip}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <span className="text-right text-[10px] text-content-faint">{peak}%</span>
+                </div>
+              )
+            })}
+          </div>
+        </InfoBlock>
+      )}
+    </>
+  )
+}
+
+function ReviewsPanel({ reviews, onClose, t }: {
+  reviews: Array<{ author?: string | null; rating?: number | null; text?: string | null; time?: string | null; published_at?: string | null; photo?: string | null; uri?: string | null }>
+  onClose: () => void
+  t: TFunction
+}) {
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/45 p-3 sm:items-center" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('inspector.reviews')}
+        className="flex max-h-[min(680px,calc(100vh-32px))] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl bg-surface-elevated shadow-[0_18px_60px_rgba(0,0,0,0.28)] [backdrop-filter:blur(28px)_saturate(180%)] [-webkit-backdrop-filter:blur(28px)_saturate(180%)]"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center gap-3 border-b border-edge-faint px-4 py-3">
+          <MessageSquare size={16} className="text-content-faint" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-content">{t('inspector.reviews')}</div>
+            <div className="text-xs text-content-faint">{t('inspector.reviewsCount', { count: reviews.length })}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('common.close')}
+            className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-surface-hover text-content-secondary hover:bg-surface-tertiary"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <div className="flex flex-col gap-3">
+            {reviews.map((review, idx) => (
+              <div key={`${review.author || 'review'}-${idx}`} className="rounded-lg bg-surface-hover px-3 py-2.5">
+                <div className="flex items-start gap-2">
+                  {review.photo ? (
+                    <img src={review.photo} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-tertiary text-xs font-bold text-content-muted">
+                      {review.author?.trim()?.[0]?.toUpperCase() || '?'}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                      {review.author && <span className="min-w-0 truncate text-xs font-semibold text-content">{review.author}</span>}
+                      {review.rating ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-content-secondary">
+                          <Star size={11} fill="#facc15" className="text-[#facc15]" /> {review.rating}
+                        </span>
+                      ) : null}
+                      {review.time && <span className="text-[11px] text-content-faint">{review.time}</span>}
+                    </div>
+                    {review.text && (
+                      <div className="mt-1 whitespace-pre-wrap text-xs leading-[1.45] text-content-muted [overflow-wrap:anywhere]">
+                        {review.text}
+                      </div>
+                    )}
+                    {review.uri && (
+                      <a
+                        href={review.uri}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-content-secondary no-underline hover:text-content"
+                      >
+                        {t('inspector.openReview')} <ExternalLink size={11} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -362,7 +952,7 @@ interface AssignmentDurationControlProps {
   dayId: number
   placeDurationMinutes?: number | null
   onUpdateAssignmentDuration?: (assignmentId: number, dayId: number, durationMinutes: number) => Promise<void> | void
-  t: (key: string, params?: Record<string, string | number>) => string
+  t: TFunction
 }
 
 function AssignmentDurationControl({
@@ -417,37 +1007,35 @@ function AssignmentDurationControl({
     value,
   ])
 
+  const scheduledDurationLabel = t('inspector.scheduledDuration') === 'inspector.scheduledDuration'
+    ? 'Scheduled Duration'
+    : t('inspector.scheduledDuration')
+
   return (
-    <div className="bg-surface-hover" style={{ borderRadius: 10, padding: '8px 10px', display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 8, alignItems: 'start' }}>
-      <Clock size={14} color="var(--text-faint)" style={{ marginTop: 18 }} />
-      <div style={{ minWidth: 0 }}>
-        <label htmlFor={inputId} className="text-content-faint" style={{ display: 'block', fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 5 }}>
-          {t('places.durationMinutes')}
-        </label>
-        <input
-          id={inputId}
-          type="text"
-          inputMode="text"
-          value={value}
-          disabled={!onUpdateAssignmentDuration || isSaving}
-          onChange={e => setValue(e.target.value)}
-          onBlur={() => { void commitDuration() }}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              e.currentTarget.blur()
-            }
-            if (e.key === 'Escape') {
-              setValue(formatDurationInput(currentMinutes))
-              e.currentTarget.blur()
-            }
-          }}
-          placeholder={t('places.durationPlaceholder')}
-          className="form-input"
-          style={{ width: '100%' }}
-        />
-      </div>
-    </div>
+    <InfoBlock>
+      <InfoBlockLabel htmlFor={inputId} icon={<Clock size={13} className="text-content-faint" />} title={scheduledDurationLabel} />
+      <input
+        id={inputId}
+        type="text"
+        inputMode="text"
+        value={value}
+        disabled={!onUpdateAssignmentDuration || isSaving}
+        onChange={e => setValue(e.target.value)}
+        onBlur={() => { void commitDuration() }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            e.currentTarget.blur()
+          }
+          if (e.key === 'Escape') {
+            setValue(formatDurationInput(currentMinutes))
+            e.currentTarget.blur()
+          }
+        }}
+        placeholder={t('places.durationPlaceholder')}
+        className="form-input w-full text-xs"
+      />
+    </InfoBlock>
   )
 }
 
@@ -459,24 +1047,15 @@ interface ActionButtonProps {
 }
 
 function ActionButton({ onClick, variant, icon, label }: ActionButtonProps) {
-  const base = {
-    primary: { background: 'var(--accent)', color: 'var(--accent-text)', border: 'none', hoverBg: 'var(--text-secondary)' },
-    ghost: { background: 'var(--bg-hover)', color: 'var(--text-secondary)', border: 'none', hoverBg: 'var(--bg-tertiary)' },
-    danger: { background: 'rgba(239,68,68,0.08)', color: '#dc2626', border: 'none', hoverBg: 'rgba(239,68,68,0.16)' },
+  const variantClass = {
+    primary: 'bg-accent text-accent-text hover:bg-[var(--text-secondary)]',
+    ghost: 'bg-surface-hover text-content-secondary hover:bg-surface-tertiary',
+    danger: 'bg-[rgba(239,68,68,0.08)] text-[#dc2626] hover:bg-[rgba(239,68,68,0.16)]',
   }
-  const s = base[variant] || base.ghost
   return (
     <button
       onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '6px 12px', borderRadius: 10, minHeight: 30,
-        fontSize: 12, fontWeight: 500, cursor: 'pointer',
-        fontFamily: 'inherit', transition: 'background 0.15s, opacity 0.15s',
-        background: s.background, color: s.color, border: s.border,
-      }}
-      onMouseEnter={e => e.currentTarget.style.background = s.hoverBg}
-      onMouseLeave={e => e.currentTarget.style.background = s.background}
+      className={`flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[10px] border-0 px-3 py-1.5 font-[inherit] text-xs font-medium transition-[background,opacity] ${variantClass[variant] || variantClass.ghost}`}
     >
       {icon}{label}
     </button>
@@ -494,16 +1073,16 @@ interface ParticipantsBoxProps {
 }
 
 function ParticipantsBox({ tripMembers, participantIds, allJoined, onSetParticipants, selectedAssignmentId, selectedDayId, t }: ParticipantsBoxProps) {
-  const [showAdd, setShowAdd] = React.useState(false)
-  const [hoveredId, setHoveredId] = React.useState(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [hoveredId, setHoveredId] = useState<number | null>(null)
 
   // Active participants: if allJoined, show all members; otherwise show only those in participantIds
   const activeMembers = allJoined ? tripMembers : tripMembers.filter(m => participantIds.includes(m.id))
   const availableToAdd = allJoined ? [] : tripMembers.filter(m => !participantIds.includes(m.id))
 
-  const handleRemove = (userId) => {
-    if (!onSetParticipants) return
-    let newIds
+  const handleRemove = (userId: number) => {
+    if (selectedAssignmentId == null || selectedDayId == null) return
+    let newIds: number[]
     if (allJoined) {
       newIds = tripMembers.filter(m => m.id !== userId).map(m => m.id)
     } else {
@@ -513,8 +1092,8 @@ function ParticipantsBox({ tripMembers, participantIds, allJoined, onSetParticip
     onSetParticipants(selectedAssignmentId, selectedDayId, newIds)
   }
 
-  const handleAdd = (userId) => {
-    if (!onSetParticipants) return
+  const handleAdd = (userId: number) => {
+    if (selectedAssignmentId == null || selectedDayId == null) return
     const newIds = [...participantIds, userId]
     if (newIds.length === tripMembers.length) {
       onSetParticipants(selectedAssignmentId, selectedDayId, [])
@@ -525,11 +1104,11 @@ function ParticipantsBox({ tripMembers, participantIds, allJoined, onSetParticip
   }
 
   return (
-    <div style={{ borderRadius: 12, border: '1px solid var(--border-faint)', padding: '8px 10px' }}>
-      <div className="text-content-faint" style={{ fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+    <div className="mb-2 break-inside-avoid rounded-xl border border-edge-faint px-2.5 py-2">
+      <div className="mb-1.5 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.03em] text-content-faint">
         <Users size={10} /> {t('inspector.participants')}
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+      <div className="flex flex-wrap items-center gap-1">
         {activeMembers.map(member => {
           const isHovered = hoveredId === member.id
           const canRemove = activeMembers.length > 1
@@ -538,60 +1117,29 @@ function ParticipantsBox({ tripMembers, participantIds, allJoined, onSetParticip
               onMouseEnter={() => setHoveredId(member.id)}
               onMouseLeave={() => setHoveredId(null)}
               onClick={() => { if (canRemove) handleRemove(member.id) }}
-              className={isHovered && canRemove ? 'bg-[rgba(239,68,68,0.06)] text-[#ef4444]' : 'bg-surface-hover text-content'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 4, padding: '2px 7px 2px 3px', borderRadius: 99,
-                border: `1.5px solid ${isHovered && canRemove ? 'rgba(239,68,68,0.4)' : 'var(--accent)'}`,
-                fontSize: 10, fontWeight: 500,
-                cursor: canRemove ? 'pointer' : 'default',
-                transition: 'all 0.15s',
-              }}>
-              <div className="bg-surface-tertiary text-content-muted" style={{
-                width: 16, height: 16, borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700,
-                overflow: 'hidden', flexShrink: 0,
-              }}>
-                {(member.avatar_url || member.avatar) ? <img src={member.avatar_url || `/uploads/avatars/${member.avatar}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : member.username?.[0]?.toUpperCase()}
+              className={`${isHovered && canRemove ? 'border-[rgba(239,68,68,0.4)] bg-[rgba(239,68,68,0.06)] text-[#ef4444]' : 'border-accent bg-surface-hover text-content'} ${canRemove ? 'cursor-pointer' : 'cursor-default'} inline-flex rounded-full border-[1.5px]`}
+            >
+              <div className="flex items-center gap-1 rounded-full py-0.5 pl-[3px] pr-[7px] text-[10px] font-medium transition-all">
+                <div className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded-full bg-surface-tertiary text-[7px] font-bold text-content-muted">
+                  {(member.avatar_url || member.avatar) ? <img src={member.avatar_url || `/uploads/avatars/${member.avatar}`} className="h-full w-full object-cover" /> : member.username?.[0]?.toUpperCase()}
+                </div>
+                <span className={isHovered && canRemove ? 'line-through' : undefined}>{member.username}</span>
               </div>
-              <span style={{ textDecoration: isHovered && canRemove ? 'line-through' : 'none' }}>{member.username}</span>
             </div>
           )
         })}
 
         {/* Add button */}
         {availableToAdd.length > 0 && (
-          <div style={{ position: 'relative' }}>
-            <button onClick={() => setShowAdd(!showAdd)} className="text-content-faint" style={{
-              width: 22, height: 22, borderRadius: '50%', border: '1.5px dashed var(--border-primary)',
-              background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 12, transition: 'all 0.12s',
-            }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--text-muted)'; e.currentTarget.style.color = 'var(--text-primary)' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-primary)'; e.currentTarget.style.color = 'var(--text-faint)' }}
-            >+</button>
+          <div className="relative">
+            <button onClick={() => setShowAdd(!showAdd)} className="flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-edge bg-transparent text-xs text-content-faint transition-all hover:border-content-muted hover:text-content">+</button>
 
             {showAdd && (
-              <div className="bg-surface-card" style={{
-                position: 'absolute', top: 26, left: 0, zIndex: 100,
-                border: '1px solid var(--border-primary)', borderRadius: 10,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 4, minWidth: 140,
-              }}>
+              <div className="absolute left-0 top-[26px] z-[100] min-w-[140px] rounded-[10px] border border-edge bg-surface-card p-1 shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
                 {availableToAdd.map(member => (
-                  <button key={member.id} onClick={() => handleAdd(member.id)} className="text-content" style={{
-                    display: 'flex', alignItems: 'center', gap: 6, width: '100%', padding: '5px 8px',
-                    borderRadius: 6, border: 'none', background: 'none', cursor: 'pointer',
-                    fontFamily: 'inherit', fontSize: 11, textAlign: 'left',
-                    transition: 'background 0.1s',
-                  }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                  >
-                    <div className="bg-surface-tertiary text-content-muted" style={{
-                      width: 18, height: 18, borderRadius: '50%',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700,
-                      overflow: 'hidden', flexShrink: 0,
-                    }}>
-                      {(member.avatar_url || member.avatar) ? <img src={member.avatar_url || `/uploads/avatars/${member.avatar}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : member.username?.[0]?.toUpperCase()}
+                  <button key={member.id} onClick={() => handleAdd(member.id)} className="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-2 py-[5px] text-left font-[inherit] text-[11px] text-content transition-colors hover:bg-surface-hover">
+                    <div className="flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-surface-tertiary text-[8px] font-bold text-content-muted">
+                      {(member.avatar_url || member.avatar) ? <img src={member.avatar_url || `/uploads/avatars/${member.avatar}`} className="h-full w-full object-cover" /> : member.username?.[0]?.toUpperCase()}
                     </div>
                     {member.username}
                   </button>
@@ -605,9 +1153,26 @@ function ParticipantsBox({ tripMembers, participantIds, allJoined, onSetParticip
   )
 }
 
+interface PlaceInspectorHeaderProps {
+  openNow: boolean | null
+  place: Place
+  category?: Category
+  t: TFunction
+  editingName: boolean
+  nameInputRef: React.RefObject<HTMLInputElement | null>
+  nameValue: string
+  setNameValue: React.Dispatch<React.SetStateAction<string>>
+  commitNameEdit: () => void
+  handleNameKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  startNameEdit: () => void
+  onUpdatePlace: PlaceInspectorProps['onUpdatePlace']
+  onClose: () => void
+  secondaryNames: string[]
+  displayAddress?: string | null
+}
 
 function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameInputRef, nameValue, setNameValue,
-  commitNameEdit, handleNameKeyDown, startNameEdit, onUpdatePlace, locale, timeFormat, onClose }: any) {
+  commitNameEdit, handleNameKeyDown, startNameEdit, onUpdatePlace, onClose, secondaryNames, displayAddress }: PlaceInspectorHeaderProps) {
   return (
         <div style={{ display: 'flex', alignItems: 'center', gap: openNow !== null ? 26 : 14, padding: openNow !== null ? '18px 16px 14px 28px' : '18px 16px 14px', borderBottom: '1px solid var(--border-faint)', flexShrink: 0 }}>
           {/* Avatar with open/closed ring + tag */}
@@ -673,10 +1238,17 @@ function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameIn
                 )
               })()}
             </div>
-            {place.address && (
+            {!editingName && secondaryNames?.length > 0 && (
+              <div className="text-content-muted" style={{ fontSize: 12, lineHeight: 1.35, marginTop: 3, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {secondaryNames.map(name => (
+                  <span key={name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                ))}
+              </div>
+            )}
+            {displayAddress && (
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, marginTop: 6 }}>
                 <MapPin size={11} color="var(--text-faint)" style={{ flexShrink: 0, marginTop: 2 }} />
-                <span className="text-content-muted" style={{ fontSize: 12, lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{place.address}</span>
+                <span className="text-content-muted" style={{ fontSize: 12, lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{displayAddress}</span>
               </div>
             )}
             {place.lat && place.lng && (
@@ -698,8 +1270,20 @@ function PlaceInspectorHeader({ openNow, place, category, t, editingName, nameIn
   )
 }
 
+interface PlaceReservationParticipantsProps {
+  selectedAssignmentId: number | null
+  reservations: Reservation[]
+  assignments: AssignmentsMap
+  selectedDayId: number | null
+  tripMembers: TripMember[]
+  locale: string
+  timeFormat: string
+  t: TFunction
+  onSetParticipants: PlaceInspectorProps['onSetParticipants']
+}
+
 function PlaceReservationParticipants({ selectedAssignmentId, reservations, assignments, selectedDayId,
-  tripMembers, locale, timeFormat, t, onSetParticipants }: any) {
+  tripMembers, locale, timeFormat, t, onSetParticipants }: PlaceReservationParticipantsProps) {
   return (
     <>
           {(() => {
@@ -711,19 +1295,19 @@ function PlaceReservationParticipants({ selectedAssignmentId, reservations, assi
             const showParticipants = selectedAssignmentId && tripMembers.length > 1
             if (!res && !showParticipants) return null
             return (
-              <div className={`grid ${res && showParticipants ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-2`}>
+              <>
                 {/* Reservation */}
                 {res && (() => {
                   const confirmed = res.status === 'confirmed'
                   return (
-                    <div style={{ borderRadius: 12, overflow: 'hidden', border: `1px solid ${confirmed ? 'rgba(22,163,74,0.2)' : 'rgba(217,119,6,0.2)'}` }}>
-                      <div className={confirmed ? 'bg-[rgba(22,163,74,0.08)]' : 'bg-[rgba(217,119,6,0.08)]'} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px' }}>
-                        <div className={confirmed ? 'bg-[#16a34a]' : 'bg-[#d97706]'} style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0 }} />
-                        <span className={confirmed ? 'text-[#16a34a]' : 'text-[#d97706]'} style={{ fontSize: 10, fontWeight: 700 }}>{confirmed ? t('reservations.confirmed') : t('reservations.pending')}</span>
-                        <span style={{ flex: 1 }} />
-                        <span className="text-content" style={{ fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{res.title}</span>
+                    <div className={`mb-2 break-inside-avoid overflow-hidden rounded-xl border bg-surface-hover ${confirmed ? 'border-[rgba(22,163,74,0.2)]' : 'border-[rgba(217,119,6,0.2)]'}`}>
+                      <div className={`flex items-center gap-2 px-2.5 py-1.5 ${confirmed ? 'bg-[rgba(22,163,74,0.08)]' : 'bg-[rgba(217,119,6,0.08)]'}`}>
+                        <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${confirmed ? 'bg-[#16a34a]' : 'bg-[#d97706]'}`} />
+                        <span className={`text-[10px] font-bold ${confirmed ? 'text-[#16a34a]' : 'text-[#d97706]'}`}>{confirmed ? t('reservations.confirmed') : t('reservations.pending')}</span>
+                        <span className="flex-1" />
+                        <span className="truncate text-[11px] font-semibold text-content">{res.title}</span>
                       </div>
-                      <div style={{ padding: '6px 10px', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <div className="flex flex-wrap gap-3 px-2.5 py-1.5">
                         {(() => {
                           const { date, time: startTime } = splitReservationDateTime(res.reservation_time)
                           const { time: endTime } = splitReservationDateTime(res.reservation_end_time)
@@ -731,14 +1315,14 @@ function PlaceReservationParticipants({ selectedAssignmentId, reservations, assi
                             <>
                               {date && (
                                 <div>
-                                  <div className="text-content-faint" style={{ fontSize: 8, fontWeight: 600, textTransform: 'uppercase' }}>{t('reservations.date')}</div>
-                                  <div className="text-content" style={{ fontSize: 10, fontWeight: 500, marginTop: 1 }}>{new Date(date + 'T00:00:00Z').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}</div>
+                                  <div className="text-[8px] font-semibold uppercase text-content-faint">{t('reservations.date')}</div>
+                                  <div className="mt-px text-[10px] font-medium text-content">{new Date(date + 'T00:00:00Z').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}</div>
                                 </div>
                               )}
                               {(startTime || endTime) && (
                                 <div>
-                                  <div className="text-content-faint" style={{ fontSize: 8, fontWeight: 600, textTransform: 'uppercase' }}>{t('reservations.time')}</div>
-                                  <div className="text-content" style={{ fontSize: 10, fontWeight: 500, marginTop: 1 }}>
+                                  <div className="text-[8px] font-semibold uppercase text-content-faint">{t('reservations.time')}</div>
+                                  <div className="mt-px text-[10px] font-medium text-content">
                                     {startTime ? formatTime(startTime, locale, timeFormat) : ''}
                                     {endTime ? ` – ${formatTime(endTime, locale, timeFormat)}` : ''}
                                   </div>
@@ -749,12 +1333,12 @@ function PlaceReservationParticipants({ selectedAssignmentId, reservations, assi
                         })()}
                         {res.confirmation_number && (
                           <div>
-                            <div className="text-content-faint" style={{ fontSize: 8, fontWeight: 600, textTransform: 'uppercase' }}>{t('reservations.confirmationCode')}</div>
-                            <div className="text-content" style={{ fontSize: 10, fontWeight: 500, marginTop: 1 }}>{res.confirmation_number}</div>
+                            <div className="text-[8px] font-semibold uppercase text-content-faint">{t('reservations.confirmationCode')}</div>
+                            <div className="mt-px text-[10px] font-medium text-content">{res.confirmation_number}</div>
                           </div>
                         )}
                       </div>
-                      {res.notes && <div className="collab-note-md text-content-faint" style={{ padding: '0 10px 6px', fontSize: 10, lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'anywhere' }}><Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{res.notes}</Markdown></div>}
+                      {res.notes && <div className="collab-note-md px-2.5 pb-1.5 text-[10px] leading-[1.4] text-content-faint [overflow-wrap:anywhere] [word-break:break-word]"><Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{res.notes}</Markdown></div>}
                       {(() => {
                         const meta = typeof res.metadata === 'string' ? JSON.parse(res.metadata || '{}') : (res.metadata || {})
                         if (!meta || Object.keys(meta).length === 0) return null
@@ -767,7 +1351,7 @@ function PlaceReservationParticipants({ selectedAssignmentId, reservations, assi
                         if (meta.check_in_time) parts.push(`Check-in ${meta.check_in_time}`)
                         if (meta.check_out_time) parts.push(`Check-out ${meta.check_out_time}`)
                         if (parts.length === 0) return null
-                        return <div className="text-content-muted" style={{ padding: '0 10px 6px', fontSize: 10, fontWeight: 500 }}>{parts.join(' · ')}</div>
+                        return <div className="px-2.5 pb-1.5 text-[10px] font-medium text-content-muted">{parts.join(' · ')}</div>
                       })()}
                     </div>
                   )
@@ -785,43 +1369,184 @@ function PlaceReservationParticipants({ selectedAssignmentId, reservations, assi
                     t={t}
                   />
                 )}
-              </div>
+              </>
             )
           })()}
     </>
   )
 }
 
-function PlaceExtras({ openingHours, weekdayIndex, hoursExpanded, setHoursExpanded, timeFormat, t, place,
-  placeFiles, onFileUpload, filesExpanded, setFilesExpanded, fileInputRef, handleFileUpload, isUploading, distanceUnit }: any) {
+interface RouteTrackStats {
+  distanceMeters: number
+  hasElevation: boolean
+  minElevation: number
+  maxElevation: number
+  totalUp: number
+  totalDown: number
+  chartWidth: number
+  chartHeight: number
+  elevationPath: string
+}
+
+function routeTrackStatsFromGeometry(routeGeometry?: string | null): RouteTrackStats | null {
+  if (!routeGeometry) return null
+  try {
+    const points = JSON.parse(routeGeometry) as number[][]
+    if (!Array.isArray(points) || points.length < 2 || points.some(point => !Array.isArray(point) || point.length < 2)) return null
+
+    const toRad = (degrees: number) => degrees * Math.PI / 180
+    let distanceMeters = 0
+    for (let i = 1; i < points.length; i++) {
+      const [lat1, lng1] = points[i - 1]
+      const [lat2, lng2] = points[i]
+      if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) return null
+      const dLat = toRad(lat2 - lat1)
+      const dLng = toRad(lng2 - lng1)
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+      distanceMeters += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    }
+
+    const hasElevation = points[0].length >= 3
+    let minElevation = Infinity
+    let maxElevation = -Infinity
+    let totalUp = 0
+    let totalDown = 0
+    const elevations = hasElevation ? points.map(point => point[2]).filter(Number.isFinite) : []
+    if (hasElevation && elevations.length !== points.length) return null
+
+    for (let i = 0; i < elevations.length; i++) {
+      const elevation = elevations[i]
+      minElevation = Math.min(minElevation, elevation)
+      maxElevation = Math.max(maxElevation, elevation)
+      if (i > 0) {
+        const diff = elevation - elevations[i - 1]
+        if (diff > 0) totalUp += diff
+        else totalDown += Math.abs(diff)
+      }
+    }
+
+    const chartWidth = 280
+    const chartHeight = 60
+    let elevationPath = ''
+    if (elevations.length > 1) {
+      const step = Math.max(1, Math.floor(elevations.length / chartWidth))
+      const sampled = elevations.filter((_, i) => i % step === 0)
+      const eMin = Math.min(...sampled)
+      const eMax = Math.max(...sampled)
+      const range = eMax - eMin || 1
+      elevationPath = sampled.map((elevation, i) => {
+        const x = (i / (sampled.length - 1)) * chartWidth
+        const y = chartHeight - ((elevation - eMin) / range) * (chartHeight - 4) - 2
+        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+      }).join(' ')
+    }
+
+    return {
+      distanceMeters,
+      hasElevation,
+      minElevation,
+      maxElevation,
+      totalUp,
+      totalDown,
+      chartWidth,
+      chartHeight,
+      elevationPath,
+    }
+  } catch {
+    return null
+  }
+}
+
+function TrackStatsBlock({ place, t, distanceUnit }: { place: Place; t: TFunction; distanceUnit: DistanceUnit }) {
+  const stats = routeTrackStatsFromGeometry(place.route_geometry)
+  if (!stats) return null
+
+  const distanceKm = stats.distanceMeters / 1000
+
   return (
-          <div className={`grid grid-cols-1 ${openingHours?.length > 0 ? 'sm:grid-cols-2' : ''} gap-2`}>
+    <InfoBlock className="flex flex-col gap-2">
+      <InfoBlockHeader
+        className="mb-0"
+        icon={<TrendingUp size={13} className="text-content-faint" />}
+        title={t('inspector.trackStats')}
+      />
+      <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1 text-xs font-semibold text-content">
+          <MapPin size={12} className="text-[#3b82f6]" />
+          {formatDistance(distanceKm, distanceUnit)}
+        </div>
+        {stats.hasElevation && (
+          <>
+            <div className="flex items-center gap-1 text-xs font-semibold text-content">
+              <Mountain size={12} className="text-[#22c55e]" />
+              {formatElevation(stats.maxElevation, distanceUnit)}
+            </div>
+            <div className="flex items-center gap-1 text-xs font-semibold text-content">
+              <Mountain size={12} className="text-[#ef4444]" />
+              {formatElevation(stats.minElevation, distanceUnit)}
+            </div>
+            <div className="text-xs text-content-muted">
+              ↑{formatElevation(stats.totalUp, distanceUnit)} &nbsp;↓{formatElevation(stats.totalDown, distanceUnit)}
+            </div>
+          </>
+        )}
+      </div>
+      {stats.elevationPath && (
+        <svg width="100%" viewBox={`0 0 ${stats.chartWidth} ${stats.chartHeight}`} preserveAspectRatio="none" className="block rounded-md bg-surface-tertiary">
+          <defs>
+            <linearGradient id={`ele-grad-${place.id}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          <path d={`${stats.elevationPath} L${stats.chartWidth},${stats.chartHeight} L0,${stats.chartHeight} Z`} fill={`url(#ele-grad-${place.id})`} />
+          <path d={stats.elevationPath} fill="none" stroke="#3b82f6" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        </svg>
+      )}
+    </InfoBlock>
+  )
+}
+
+interface PlaceExtrasProps {
+  openingHours: string[] | null
+  weekdayIndex: number
+  hoursExpanded: boolean
+  setHoursExpanded: React.Dispatch<React.SetStateAction<boolean>>
+  timeFormat: string
+  t: TFunction
+  place: Place
+  placeFiles: TripFile[]
+  onFileUpload?: PlaceInspectorProps['onFileUpload']
+  filesExpanded: boolean
+  setFilesExpanded: React.Dispatch<React.SetStateAction<boolean>>
+  fileInputRef: React.RefObject<HTMLInputElement | null>
+  handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void
+  isUploading: boolean
+  distanceUnit: DistanceUnit
+}
+
+function PlaceExtras({ openingHours, weekdayIndex, hoursExpanded, setHoursExpanded, timeFormat, t, place,
+  placeFiles, onFileUpload, filesExpanded, setFilesExpanded, fileInputRef, handleFileUpload, isUploading, distanceUnit }: PlaceExtrasProps) {
+  return (
+          <>
           {openingHours && openingHours.length > 0 && (
-            <div className="bg-surface-hover" style={{ borderRadius: 10, overflow: 'hidden' }}>
+            <div className={INFO_BLOCK_FLUSH_CLASS}>
               <button
                 onClick={() => setHoursExpanded(h => !h)}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer',
-                  fontFamily: 'inherit',
-                }}
+                className="flex w-full cursor-pointer items-center justify-between border-0 bg-transparent px-3 py-2 font-[inherit]"
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Clock size={13} color="#9ca3af" />
-                  <span className="text-content-secondary" style={{ fontSize: 12, fontWeight: 500 }}>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Clock size={13} className="shrink-0 text-content-faint" />
+                  <span className="truncate text-xs font-medium text-content-secondary">
                     {hoursExpanded ? t('inspector.openingHours') : (convertHoursLine(openingHours[weekdayIndex] || '', timeFormat) || t('inspector.showHours'))}
                   </span>
                 </div>
-                {hoursExpanded ? <ChevronUp size={13} color="#9ca3af" /> : <ChevronDown size={13} color="#9ca3af" />}
+                {hoursExpanded ? <ChevronUp size={13} className="shrink-0 text-content-faint" /> : <ChevronDown size={13} className="shrink-0 text-content-faint" />}
               </button>
               {hoursExpanded && (
-                <div style={{ padding: '0 12px 10px' }}>
+                <div className="px-3 pb-2.5">
                   {openingHours.map((line, i) => (
-                    <div key={i} className={i === weekdayIndex ? 'text-content' : 'text-content-muted'} style={{
-                      fontSize: 12,
-                      fontWeight: i === weekdayIndex ? 600 : 400,
-                      padding: '2px 0',
-                    }}>{convertHoursLine(line, timeFormat)}</div>
+                    <div key={i} className={`${i === weekdayIndex ? 'font-semibold text-content' : 'font-normal text-content-muted'} py-0.5 text-xs`}>{convertHoursLine(line, timeFormat)}</div>
                   ))}
                 </div>
               )}
@@ -829,117 +1554,27 @@ function PlaceExtras({ openingHours, weekdayIndex, hoursExpanded, setHoursExpand
           )}
 
 
-          {/* GPX Track stats */}
-          {place.route_geometry && (() => {
-            try {
-              const pts: number[][] = JSON.parse(place.route_geometry)
-              if (!pts || pts.length < 2) return null
-              const hasEle = pts[0].length >= 3
-
-              // Haversine distance
-              const toRad = (d: number) => d * Math.PI / 180
-              let totalDist = 0
-              for (let i = 1; i < pts.length; i++) {
-                const [lat1, lng1] = pts[i - 1], [lat2, lng2] = pts[i]
-                const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1)
-                const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
-                totalDist += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-              }
-              const distKm = totalDist / 1000
-
-              // Elevation stats
-              let minEle = Infinity, maxEle = -Infinity, totalUp = 0, totalDown = 0
-              if (hasEle) {
-                for (let i = 0; i < pts.length; i++) {
-                  const e = pts[i][2]
-                  if (e < minEle) minEle = e
-                  if (e > maxEle) maxEle = e
-                  if (i > 0) {
-                    const diff = e - pts[i - 1][2]
-                    if (diff > 0) totalUp += diff; else totalDown += Math.abs(diff)
-                  }
-                }
-              }
-
-              // Elevation profile SVG
-              const chartW = 280, chartH = 60
-              const elevations = hasEle ? pts.map(p => p[2]) : []
-              let pathD = ''
-              if (elevations.length > 1) {
-                const step = Math.max(1, Math.floor(elevations.length / chartW))
-                const sampled = elevations.filter((_, i) => i % step === 0)
-                const eMin = Math.min(...sampled), eMax = Math.max(...sampled)
-                const range = eMax - eMin || 1
-                pathD = sampled.map((e, i) => {
-                  const x = (i / (sampled.length - 1)) * chartW
-                  const y = chartH - ((e - eMin) / range) * (chartH - 4) - 2
-                  return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
-                }).join(' ')
-              }
-
-              return (
-                <div className="bg-surface-hover" style={{ borderRadius: 10, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <TrendingUp size={13} color="#9ca3af" />
-                    <span className="text-content-secondary" style={{ fontSize: 12, fontWeight: 500 }}>{t('inspector.trackStats')}</span>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    <div className="text-content" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600 }}>
-                      <MapPin size={12} color="#3b82f6" />
-                      {formatDistance(distKm, distanceUnit)}
-                    </div>
-                    {hasEle && (
-                      <>
-                        <div className="text-content" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600 }}>
-                          <Mountain size={12} color="#22c55e" />
-                          {formatElevation(maxEle, distanceUnit)}
-                        </div>
-                        <div className="text-content" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600 }}>
-                          <Mountain size={12} color="#ef4444" />
-                          {formatElevation(minEle, distanceUnit)}
-                        </div>
-                        <div className="text-content-muted" style={{ fontSize: 12 }}>
-                          ↑{formatElevation(totalUp, distanceUnit)} &nbsp;↓{formatElevation(totalDown, distanceUnit)}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  {pathD && (
-                    <svg width="100%" viewBox={`0 0 ${chartW} ${chartH}`} preserveAspectRatio="none" className="bg-surface-tertiary" style={{ display: 'block', borderRadius: 6 }}>
-                      <defs>
-                        <linearGradient id={`ele-grad-${place.id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.25" />
-                          <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
-                        </linearGradient>
-                      </defs>
-                      <path d={`${pathD} L${chartW},${chartH} L0,${chartH} Z`} fill={`url(#ele-grad-${place.id})`} />
-                      <path d={pathD} fill="none" stroke="#3b82f6" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-                    </svg>
-                  )}
-                </div>
-              )
-            } catch { return null }
-          })()}
+          <TrackStatsBlock place={place} t={t} distanceUnit={distanceUnit} />
 
           {/* Files section */}
           {(placeFiles.length > 0 || onFileUpload) && (
-            <div className="bg-surface-hover" style={{ borderRadius: 10, overflow: 'hidden' }}>
-              <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', gap: 6 }}>
+            <div className={INFO_BLOCK_FLUSH_CLASS}>
+              <div className="flex items-center gap-1.5 px-3 py-2">
                 <button
                   onClick={() => setFilesExpanded(f => !f)}
-                  style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit', textAlign: 'left' }}
+                  className="flex flex-1 cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left font-[inherit]"
                 >
-                  <FileText size={13} color="#9ca3af" />
-                  <span className="text-content-secondary" style={{ fontSize: 12, fontWeight: 500 }}>
+                  <FileText size={13} className="shrink-0 text-content-faint" />
+                  <span className="text-xs font-medium text-content-secondary">
                     {placeFiles.length > 0 ? t('inspector.filesCount', { count: placeFiles.length }) : t('inspector.files')}
                   </span>
-                  {filesExpanded ? <ChevronUp size={12} color="#9ca3af" /> : <ChevronDown size={12} color="#9ca3af" />}
+                  {filesExpanded ? <ChevronUp size={12} className="text-content-faint" /> : <ChevronDown size={12} className="text-content-faint" />}
                 </button>
                 {onFileUpload && (
-                  <label className="text-content-muted bg-surface-tertiary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '2px 6px', borderRadius: 6 }}>
-                    <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileUpload} />
+                  <label className="flex cursor-pointer items-center gap-1 rounded-md bg-surface-tertiary px-1.5 py-0.5 text-[11px] text-content-muted">
+                    <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
                     {isUploading ? (
-                      <span style={{ fontSize: 11 }}>…</span>
+                      <span className="text-[11px]">…</span>
                     ) : (
                       <><Upload size={11} strokeWidth={2} /> {t('common.upload')}</>
                     )}
@@ -947,18 +1582,18 @@ function PlaceExtras({ openingHours, weekdayIndex, hoursExpanded, setHoursExpand
                 )}
               </div>
               {filesExpanded && placeFiles.length > 0 && (
-                <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div className="flex flex-col gap-1 px-3 pb-2.5">
                   {placeFiles.map(f => (
-                    <button key={f.id} onClick={() => openFile(f.url).catch(() => {})} style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', cursor: 'pointer', background: 'none', border: 'none', width: '100%', textAlign: 'left' }}>
-                      {(f.mime_type || '').startsWith('image/') ? <FileImage size={12} color="#6b7280" /> : <File size={12} color="#6b7280" />}
-                      <span className="text-content-secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.original_name}</span>
-                      {f.file_size && <span className="text-content-faint" style={{ fontSize: 11, flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
+                    <button key={f.id} onClick={() => openFile(f.url).catch(() => {})} className="flex w-full cursor-pointer items-center gap-2 border-0 bg-transparent text-left no-underline">
+                      {(f.mime_type || '').startsWith('image/') ? <FileImage size={12} className="text-content-muted" /> : <File size={12} className="text-content-muted" />}
+                      <span className="flex-1 truncate text-xs text-content-secondary">{f.original_name}</span>
+                      {f.file_size && <span className="shrink-0 text-[11px] text-content-faint">{formatFileSize(f.file_size)}</span>}
                     </button>
                   ))}
                 </div>
               )}
             </div>
           )}
-          </div>
+          </>
   )
 }

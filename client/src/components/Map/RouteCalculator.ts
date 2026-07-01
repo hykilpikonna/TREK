@@ -22,7 +22,7 @@ const OSRM_PROFILE_BASE: Record<OsrmRouteProfile, string> = {
 const routeCache = new Map<string, RouteWithLegs>()
 const ROUTE_CACHE_MAX = 200
 const ROUTE_CACHE_STORAGE_KEY = 'trek:route-cache:v1'
-const ROUTE_CACHE_VERSION = 10
+const ROUTE_CACHE_VERSION = 18
 const ROUTE_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const ROUTE_CHOICE_STORAGE_KEY = 'trek:route-alternative-choices:v1'
 const ROUTE_CHOICE_VERSION = 1
@@ -123,6 +123,13 @@ interface GoogleMobileDirectionsMoney {
   label: string | null
 }
 
+interface GoogleMobileDirectionsStep {
+  instruction?: string | null
+  maneuver?: string | null
+  distance?: { meters: number | null; text: string | null }
+  duration?: GoogleMobileDirectionsDuration | null
+}
+
 interface GoogleMobileDirectionsRoute {
   distance?: { meters: number | null; text: string | null }
   duration?: GoogleMobileDirectionsDuration
@@ -133,6 +140,7 @@ interface GoogleMobileDirectionsRoute {
   } | null
   tollFee?: GoogleMobileDirectionsMoney | null
   overviewGeometry?: Array<{ lat: number; lng: number }>
+  steps?: GoogleMobileDirectionsStep[]
 }
 
 interface GoogleMobileDirectionsResponse {
@@ -470,8 +478,8 @@ export async function calculateSegments(
 /**
  * One OSRM call per waypoint-run that returns BOTH the real road geometry (for the
  * map) and per-leg distance/duration (for the sidebar connectors). Results are cached
- * by the exact waypoint list. Throws on OSRM failure so callers can fall back to a
- * straight line.
+ * by the exact waypoint list. Throws on provider failure so callers can surface the
+ * route error instead of showing stale or synthetic routing data.
  */
 export async function calculateRouteWithLegs(
   waypoints: Waypoint[],
@@ -505,10 +513,12 @@ export async function calculateRouteWithLegs(
     : effectiveProvider === 'google_maps_mobile'
       ? `${effectiveProvider}:${profile}:${distanceUnit}:${boundedOptimism.toFixed(2)}:${googleOptionsKey}:${departureLocalDateTime || 'now'}:${coords}`
       : `${effectiveProvider}:${profile}:${distanceUnit}:${coords}`
+  const needsRouteRefresh = (route: RouteWithLegs) =>
+    effectiveProvider !== 'google_maps_mobile' && hasIncompleteTransitDetails(route, profile)
   const cached = routeCache.get(cacheKey)
-  if (cached && !hasIncompleteTransitDetails(cached, profile)) return applyPersistedRouteChoices(cached)
+  if (cached && !needsRouteRefresh(cached)) return applyPersistedRouteChoices(cached)
   const persisted = getPersistedRoute(cacheKey)
-  if (persisted && !hasIncompleteTransitDetails(persisted, profile)) return applyPersistedRouteChoices(persisted)
+  if (persisted && !needsRouteRefresh(persisted)) return applyPersistedRouteChoices(persisted)
 
   if (effectiveProvider === 'google_maps') {
     const result = await calculateGoogleRouteWithLegs(waypoints, {
@@ -873,6 +883,19 @@ function googleStepToRouteStep(step: GoogleDirectionsStep, mode: RouteStep['mode
   }
 }
 
+function googleMobileStepToRouteStep(step: GoogleMobileDirectionsStep, mode: RouteStep['mode']): RouteStep {
+  const distance = Number.isFinite(step.distance?.meters) ? Number(step.distance?.meters) : null
+  const duration = Number.isFinite(step.duration?.seconds) ? Number(step.duration?.seconds) : null
+  return {
+    mode,
+    instruction: step.instruction ?? null,
+    distance,
+    duration,
+    distanceText: step.distance?.text ?? (distance !== null ? formatRouteDistance(distance) : null),
+    durationText: step.duration?.text ?? (duration !== null ? formatDuration(duration) : null),
+  }
+}
+
 function googleRouteTransitSteps(route: GoogleDirectionsRoute, profile: RouteProfile): RouteStep[] {
   const steps: RouteStep[] = []
   const nonTransitMode: RouteStep['mode'] =
@@ -984,6 +1007,9 @@ function googleMobileRouteAlternative(
   const distance = Number(route.distance?.meters) || 0
   const durationText = formatDuration(duration)
   const tollText = profile === 'transit' ? undefined : formatGoogleMobileTollText(route.tollFee)
+  const stepMode: RouteStep['mode'] =
+    profile === 'driving' || profile === 'walking' || profile === 'cycling' ? profile : 'unknown'
+  const steps = (route.steps ?? []).map(step => googleMobileStepToRouteStep(step, stepMode))
   return {
     index,
     distance,
@@ -993,8 +1019,13 @@ function googleMobileRouteAlternative(
     distanceText: route.distance?.text ?? formatRouteDistance(distance),
     durationText,
     ...(tollText ? { tollText } : {}),
+    ...(steps.length ? { steps } : {}),
     coordinates: coordinatesFromGeometry(route.overviewGeometry, from, to),
   }
+}
+
+function googleMobileLocation(point: Waypoint): { lat: number; lng: number } {
+  return { lat: point.lat, lng: point.lng }
 }
 
 async function fetchGoogleTransitPreviewRoutes(
@@ -1161,38 +1192,22 @@ async function calculateGoogleMobileRouteWithLegs(
     const from = waypoints[i]
     const to = waypoints[i + 1]
     const legDeparture = currentDeparture
-    const body = {
-      from: { lat: from.lat, lng: from.lng },
-      to: { lat: to.lat, lng: to.lng },
-      ...(legDeparture ? { departureTime: { kind: 'departAtLocal' as const, localDateTime: legDeparture } } : {}),
+    const buildBody = (departure: string | null) => ({
+      from: googleMobileLocation(from),
+      to: googleMobileLocation(to),
+      ...(departure ? { departureTime: { kind: 'departAtLocal' as const, localDateTime: departure } } : {}),
       options: {
         mode: googleMode(profile),
         avoidTolls: google?.avoidTolls === true,
         avoidHighways: google?.avoidHighways === true,
         avoidFerries: google?.avoidFerries === true,
       },
-    }
-    const response = await apiClient.post('/maps/directions-mobile', body, { signal }).then(r => r.data as GoogleMobileDirectionsResponse)
+    })
+    const response = await apiClient.post('/maps/directions-mobile', buildBody(legDeparture), { signal }).then(r => r.data as GoogleMobileDirectionsResponse)
     const mobileRoutes = response.routes ?? []
     if (!mobileRoutes.length) throw new Error('No route found')
 
-    let alternatives: RouteAlternative[]
-    if (profile === 'transit') {
-      const previewRoutes = await fetchGoogleTransitPreviewRoutes(from, to, legDeparture, google, signal)
-      alternatives = previewRoutes.length
-        ? previewRoutes.map((route, index): RouteAlternative => {
-          const mobileIndex = Number.isInteger(route.index) ? Number(route.index) : index
-          const mobileRoute = mobileRoutes[mobileIndex]
-          const alternative = googleRouteAlternative(route, from, to, 'transit', optimism, index)
-          const mobileCoordinates = mobileRoute?.overviewGeometry
-            ? coordinatesFromGeometry(mobileRoute.overviewGeometry, from, to)
-            : null
-          return mobileCoordinates ? { ...alternative, coordinates: mobileCoordinates } : alternative
-        })
-        : mobileRoutes.map((route, index) => googleMobileRouteAlternative(response, route, from, to, 'transit', optimism, index))
-    } else {
-      alternatives = mobileRoutes.map((route, index) => googleMobileRouteAlternative(response, route, from, to, profile, optimism, index))
-    }
+    const alternatives = mobileRoutes.map((route, index) => googleMobileRouteAlternative(response, route, from, to, profile, optimism, index))
     const choiceKey = buildRouteChoiceKey('google_maps_mobile', profile, optimism, google, legDeparture, from, to)
     const selected = selectRouteAlternative(from, to, alternatives, choiceKey)
     appendLegCoordinates(coordinates, selected.coordinates?.length ? selected.coordinates : [selected.from, selected.to])
